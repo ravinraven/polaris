@@ -20,7 +20,7 @@ The goals of this project are:
 
 # Features
 
-- 🖥️ Runs on Windows, Linux, BSD, or through Docker
+- 🖥️ Runs on Windows, Linux, BSD, or in a container (Podman, Docker)
 - 🔊 Support for `flac`, `mp3`, `mp4`, `mpc`, `ogg`, `opus`, `ape`, `wav` and `aiff` files
 - 🌈 Dark mode variants and customizable color palette
 - 💿️ Browse your music by album, artist or genre
@@ -38,6 +38,8 @@ The goals of this project are:
 # Installation
 
 [Installation documentation](docs/SETUP.md)
+
+[Running Polaris in a container](docs/CONTAINER.md)
 
 [Streaming from remote devices](docs/DDNS.md)
 

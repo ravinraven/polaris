@@ -8,7 +8,7 @@
 
 ### General
 
-- Docker images are now published on [Docker Hub](https://hub.docker.com/r/agersant/polaris) and maintained in the [agersant/polaris-docker](https://github.com/agersant/polaris-docker/) repository. Thank you @ogarcia for all the years maintaining `docker-polaris`.
+- The container image is now built from a [Containerfile](Containerfile) in this repository, using the Polaris source code and the latest web interface. See the new [container documentation](docs/CONTAINER.md), which uses Podman (Docker also works). Images are published to the GitHub Container Registry when a release is published. The image keeps the same volumes, user and environment variables as the images previously maintained in the [agersant/polaris-docker](https://github.com/agersant/polaris-docker/) repository. Thank you @ogarcia for all the years maintaining `docker-polaris`.
 
 ### Server
 

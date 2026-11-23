@@ -29,3 +29,7 @@ While Polaris is running, access the web UI at [http://localhost:5050](http://lo
 
 ## Running unit tests
 Run `cargo test`!
+
+## Building the container image
+
+Run `podman build -t polaris .` from the root of the repository (`docker build` works too). The image is built from the [Containerfile](Containerfile), and its entrypoint is [res/container/run-polaris](res/container/run-polaris). If you add or rename a command line option that the entrypoint passes to Polaris (`-f`, `-p`, `-c`, `--data`, `--cache`, `-w`, `--log-level`), update that script and the [container documentation](docs/CONTAINER.md). Run `podman run --rm polaris --show-paths` for a quick check that the entrypoint arguments are still accepted.

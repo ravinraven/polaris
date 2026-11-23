@@ -9,6 +9,7 @@ The location of the configuration file is always logged during Polaris startup. 
 - From the `--config` (or `-c`) CLI option if present. This option must point to the `.toml` file.
 - If the CLI option is not specified, Polaris will look for a `polaris.toml` file, inside the directory specified by the `POLARIS_CONFIG_DIR` environment variable _at compilation time_. When using the Windows installer, this will be `%LOCALAPPDATA%/Permafrost/Polaris/polaris.toml`. When using the supplied Makefile, the default is either `/usr/local/etc/polaris` (for a system-wide installations), or `~/.config/polaris` (for a XDG installation).
 - If `POLARIS_CONFIG_DIR` was not set when Polaris was compiled, it will default to `.` on Linux, and the `LOCALAPPDATA` location mentioned above on Windows. This behavior on Windows may change in future releases.
+- In the [container image](CONTAINER.md), the entrypoint passes `--config` for you. It defaults to `/var/lib/polaris/polaris.toml` and can be changed with the `POLARIS_CONFIG_FILE` environment variable.
 
 ## Format
 
