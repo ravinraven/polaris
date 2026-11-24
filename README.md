@@ -21,7 +21,7 @@ The goals of this project are:
 # Features
 
 - 🖥️ Runs on Windows, Linux, BSD, or in a container (Podman, Docker)
-- 🔊 Support for `flac`, `mp3`, `mp4`, `mpc`, `ogg`, `opus`, `ape`, `wav` and `aiff` files
+- 🔊 Support for `flac`, `mp3`, `mp4`, `mpc`, `ogg`, `opus`, `ape`, `wav`, `webm` and `aiff` files
 - 🌈 Dark mode variants and customizable color palette
 - 💿️ Browse your music by album, artist or genre
 - 📂 Browse your music as a file tree
