@@ -7,9 +7,16 @@
 3. Click Polaris in the Start Menu to run the Polaris server. You can see when the server is running by looking for the Polaris icon in the Tray area (near the clock). The Polaris server will automatically start whenever you reboot your PC.
 4. To connect to the server and listen to music, access http://localhost:5050 in your web browser.
 
-## In a docker container
+## In a container
 
-To run polaris from a Docker container, please follow instructions from the [polaris-docker](https://github.com/agersant/polaris-docker) repository.
+This repository includes a [Containerfile](../Containerfile). To build the image and start Polaris with [Podman](https://podman.io/) from a clone of the repository:
+
+```sh
+podman build -t polaris .
+podman run -d --name=polaris -p 5050:5050 polaris
+```
+
+Then access http://localhost:5050 in your web browser. See the [container documentation](CONTAINER.md) for how to keep your data in volumes, mount your music, and configure the container. The image also works with Docker.
 
 ## From source on Linux
 

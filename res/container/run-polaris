@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# Entrypoint of the Polaris container image. Translates environment variables into
+# command line arguments for the polaris binary.
+
+set -eu
+
+: "${POLARIS_PORT:=5050}"
+: "${POLARIS_CONFIG_FILE:=/var/lib/polaris/polaris.toml}"
+: "${POLARIS_DATA_DIR:=/var/lib/polaris}"
+: "${POLARIS_CACHE_DIR:=/var/cache/polaris}"
+: "${POLARIS_WEB_DIR:=/usr/share/polaris/web}"
+
+# Extra arguments given to `podman run <image> ...` are appended last.
+if [ -n "${POLARIS_LOG_LEVEL:-}" ]; then
+	set -- --log-level "${POLARIS_LOG_LEVEL}" "$@"
+fi
+
+# -f: stay in the foreground. Without it Polaris daemonizes, which would make
+# the container exit immediately. Logs go to stdout (see `podman logs`).
+exec /usr/local/bin/polaris \
+	-f \
+	-p "${POLARIS_PORT}" \
+	-c "${POLARIS_CONFIG_FILE}" \
+	--data "${POLARIS_DATA_DIR}" \
+	--cache "${POLARIS_CACHE_DIR}" \
+	-w "${POLARIS_WEB_DIR}" \
+	"$@"

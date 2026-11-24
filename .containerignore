@@ -1,0 +1,27 @@
+# Version control and tooling
+.git
+.github
+.direnv
+.vscode
+
+# Build and test output
+target
+test-output
+release
+
+# Not needed to build the Linux server image
+test-data
+docs
+res/readme
+res/windows
+
+# Runtime artifacts
+auth.secret
+collection.index
+polaris.log
+polaris.ndb
+polaris.pid
+profile.json
+peaks
+thumbnails
+TestConfig.toml

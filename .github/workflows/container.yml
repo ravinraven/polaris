@@ -1,0 +1,58 @@
+name: Container
+
+on:
+  pull_request:
+    paths:
+      - Containerfile
+      - .containerignore
+      - res/container/**
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - .github/workflows/container.yml
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# The ubuntu-latest runners come with Podman preinstalled.
+jobs:
+  build:
+    name: Build image
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: podman build -t polaris:ci .
+      - name: Check that the entrypoint arguments are understood by polaris
+        run: podman run --rm polaris:ci --show-paths
+
+  publish:
+    name: Publish image to GitHub Container Registry
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${RELEASE_TAG#v}"
+          podman build -t "${image}:${version}" -t "${image}:${version%.*}" .
+          if [ "${{ github.event.release.prerelease }}" != "true" ]; then
+            podman tag "${image}:${version}" "${image}:latest"
+          fi
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+      - name: Log in to GitHub Container Registry
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${REGISTRY_TOKEN}" | podman login ghcr.io -u "${REGISTRY_USER}" --password-stdin
+      - name: Push image
+        run: podman push --all-tags "${IMAGE}"
