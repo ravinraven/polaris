@@ -24,6 +24,7 @@ pub enum AudioFormat {
 	OGG,
 	OPUS,
 	WAVE,
+	WEBM,
 	M4B,
 }
 
@@ -47,6 +48,7 @@ pub fn get_audio_format<P: AsRef<Path>>(path: P) -> Option<AudioFormat> {
 		"ogg" => Some(AudioFormat::OGG),
 		"opus" => Some(AudioFormat::OPUS),
 		"wav" => Some(AudioFormat::WAVE),
+		"webm" => Some(AudioFormat::WEBM),
 		"m4b" => Some(AudioFormat::M4B),
 		_ => None,
 	}
@@ -70,5 +72,9 @@ fn can_guess_audio_format() {
 	assert_eq!(
 		get_audio_format(Path::new("animals/🐷/my🐖file.wav")),
 		Some(AudioFormat::WAVE)
+	);
+	assert_eq!(
+		get_audio_format(Path::new("animals/🐷/my🐖file.webm")),
+		Some(AudioFormat::WEBM)
 	);
 }
