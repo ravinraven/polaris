@@ -31,6 +31,7 @@ nohash-hasher = "0.2.0"
 notify = { version = "8.2.0", default-features = false }
 notify-debouncer-full = { version = "0.7.0", default-features = false }
 num_cpus = "1.17.0"
+opus-decoder = "0.1.1"
 # TODO upstream PR: https://github.com/yboettcher/opus_headers/pull/7
 opus_headers = { git = "https://github.com/agersant/opus_headers", branch = "multivalue" }
 pbkdf2 = "0.11"

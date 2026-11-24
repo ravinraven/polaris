@@ -123,6 +123,8 @@ impl From<app::Error> for APIError {
 			app::Error::MediaDecoder(e) => APIError::AudioDecoding(e),
 			app::Error::MediaPacket(e) => APIError::AudioDecoding(e),
 			app::Error::MediaProbe(e) => APIError::AudioDecoding(e),
+			app::Error::OpusDecoder(_) => APIError::Internal,
+			app::Error::OpusChannelCount(_) => APIError::Internal,
 
 			app::Error::PeaksSerialization(_) => APIError::Internal,
 			app::Error::PeaksDeserialization(_) => APIError::Internal,

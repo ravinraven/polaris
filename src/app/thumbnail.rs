@@ -153,6 +153,7 @@ fn read(image_path: &Path) -> Result<DynamicImage, Error> {
 		Some(AudioFormat::OGG) => read_vorbis(image_path),
 		Some(AudioFormat::OPUS) => read_opus(image_path),
 		Some(AudioFormat::WAVE) => read_wave(image_path),
+		Some(AudioFormat::WEBM) | Some(AudioFormat::MKA) => read_webm(image_path),
 		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(image_path),
 		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(image_path),
 		None => image::open(image_path).map_err(|e| Error::Image(image_path.to_owned(), e)),
@@ -211,6 +212,10 @@ fn read_mp4(path: &Path) -> Result<DynamicImage, Error> {
 
 fn read_vorbis(_: &Path) -> Result<DynamicImage, Error> {
 	Err(Error::UnsupportedFormat("vorbis"))
+}
+
+fn read_webm(_: &Path) -> Result<DynamicImage, Error> {
+	Err(Error::UnsupportedFormat("webm"))
 }
 
 fn read_opus(_: &Path) -> Result<DynamicImage, Error> {

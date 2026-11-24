@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use symphonia::core::{
 	audio::SampleBuffer,
-	codecs::{DecoderOptions, CODEC_TYPE_NULL},
+	codecs::{DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_OPUS},
 	formats::FormatOptions,
 	io::{MediaSourceStream, MediaSourceStreamOptions},
 	meta::MetadataOptions,
@@ -98,9 +98,6 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 	let file = std::fs::File::open(audio_path).map_err(|e| Error::Io(audio_path.to_owned(), e))?;
 	let media_source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
-	let mut peaks = Peaks::default();
-	peaks.interleaved.reserve(5 * peaks_per_minute);
-
 	let mut format = symphonia::default::get_probe()
 		.format(
 			&Hint::new(),
@@ -118,13 +115,60 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 		.ok_or_else(|| Error::MediaEmpty(audio_path.to_owned()))?;
 
 	let track_id = track.id;
+	let is_opus = track.codec_params.codec == CODEC_TYPE_OPUS;
+
+	let mut accumulator = Accumulator::default();
+
+	// symphonia does not ship an Opus decoder, so Opus streams (in Ogg or
+	// Matroska/WebM containers) are decoded with a pure-Rust Opus decoder instead.
+	if is_opus {
+		let num_channels = track
+			.codec_params
+			.channels
+			.map(|c| c.count())
+			.unwrap_or(2);
+		if !(1..=2).contains(&num_channels) {
+			return Err(Error::OpusChannelCount(num_channels));
+		}
+		const OPUS_SAMPLE_RATE: u32 = 48_000;
+		const MAX_FRAME_SAMPLES: usize = 5760; // 120 ms at 48 kHz, per channel
+		let mut decoder = opus_decoder::OpusDecoder::new(OPUS_SAMPLE_RATE, num_channels)
+			.map_err(Error::OpusDecoder)?;
+		let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * num_channels];
+		let mut samples = Vec::with_capacity(pcm.len());
+
+		loop {
+			let packet = match format.next_packet() {
+				Ok(packet) => packet,
+				Err(symphonia::core::errors::Error::IoError(e))
+					if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+				{
+					break;
+				}
+				Err(e) => return Err(Error::MediaPacket(e)),
+			};
+			if packet.track_id() != track_id {
+				continue;
+			}
+			let Ok(num_decoded) = decoder.decode(&packet.data, &mut pcm, false) else {
+				continue;
+			};
+			samples.clear();
+			// Same conversion as symphonia's SampleBuffer<u8>: keep the top 8 bits, unsigned.
+			samples.extend(
+				pcm[..num_decoded * num_channels]
+					.iter()
+					.map(|s| ((*s >> 8) + 128) as u8),
+			);
+			accumulator.ingest(&samples, num_channels, OPUS_SAMPLE_RATE, peaks_per_minute);
+		}
+
+		return Ok(accumulator.peaks);
+	}
 
 	let mut decoder = symphonia::default::get_codecs()
 		.make(&track.codec_params, &DecoderOptions::default())
 		.map_err(Error::MediaDecoder)?;
-
-	let (mut min, mut max) = (u8::MAX, u8::MIN);
-	let mut num_ingested = 0;
 
 	loop {
 		let packet = match format.next_packet() {
@@ -148,12 +192,45 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 
 		let num_channels = decoded.spec().channels.count();
 		let sample_rate = decoded.spec().rate;
+		let mut buffer = SampleBuffer::<u8>::new(decoded.capacity() as u64, *decoded.spec());
+		buffer.copy_interleaved_ref(decoded);
+		accumulator.ingest(buffer.samples(), num_channels, sample_rate, peaks_per_minute);
+	}
+
+	Ok(accumulator.peaks)
+}
+
+struct Accumulator {
+	peaks: Peaks,
+	min: u8,
+	max: u8,
+	num_ingested: usize,
+}
+
+impl Default for Accumulator {
+	fn default() -> Self {
+		Self {
+			peaks: Peaks::default(),
+			min: u8::MAX,
+			max: u8::MIN,
+			num_ingested: 0,
+		}
+	}
+}
+
+impl Accumulator {
+	/// Folds interleaved unsigned 8-bit samples into min/max peak pairs.
+	fn ingest(
+		&mut self,
+		interleaved: &[u8],
+		num_channels: usize,
+		sample_rate: u32,
+		peaks_per_minute: usize,
+	) {
 		let num_samples_per_peak =
 			((sample_rate as f32) * 60.0 / (peaks_per_minute as f32)).round() as usize;
 
-		let mut buffer = SampleBuffer::<u8>::new(decoded.capacity() as u64, *decoded.spec());
-		buffer.copy_interleaved_ref(decoded);
-		for samples in buffer.samples().chunks_exact(num_channels) {
+		for samples in interleaved.chunks_exact(num_channels) {
 			// Merge channels into mono signal
 			let mut mono: u32 = 0;
 			for sample in samples {
@@ -161,18 +238,47 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 			}
 			mono /= samples.len() as u32;
 
-			min = u8::min(min, mono as u8);
-			max = u8::max(max, mono as u8);
-			num_ingested += 1;
+			self.min = u8::min(self.min, mono as u8);
+			self.max = u8::max(self.max, mono as u8);
+			self.num_ingested += 1;
 
-			if num_ingested >= num_samples_per_peak {
-				peaks.interleaved.push(min);
-				peaks.interleaved.push(max);
-				(min, max) = (u8::MAX, u8::MIN);
-				num_ingested = 0;
+			if self.num_ingested >= num_samples_per_peak {
+				self.peaks.interleaved.push(self.min);
+				self.peaks.interleaved.push(self.max);
+				(self.min, self.max) = (u8::MAX, u8::MIN);
+				self.num_ingested = 0;
 			}
 		}
 	}
+}
 
-	Ok(peaks)
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn computes_peaks_for_opus_streams() {
+		// sample.opus is silent, so only check that decoding succeeds.
+		let silent = compute_peaks(Path::new("test-data/formats/sample.opus")).unwrap();
+		assert!(!silent.interleaved.is_empty());
+
+		// These contain a sine wave, so peaks must not be flat.
+		for path in [
+			"test-data/formats/sample.webm",
+			"test-data/formats/sample-tone.mka",
+		] {
+			let peaks = compute_peaks(Path::new(path)).unwrap();
+			assert!(!peaks.interleaved.is_empty(), "no peaks for {path}");
+			assert!(
+				peaks.interleaved.chunks_exact(2).any(|p| p[0] != p[1]),
+				"peaks for {path} are flat, audio was probably not decoded"
+			);
+		}
+	}
+
+	#[test]
+	fn computes_peaks_for_matroska_flac() {
+		let peaks = compute_peaks(Path::new("test-data/formats/sample.mka")).unwrap();
+		assert!(!peaks.interleaved.is_empty());
+	}
 }

@@ -37,6 +37,7 @@ pub fn read_metadata<P: AsRef<Path>>(path: P) -> Option<SongMetadata> {
 		Some(AudioFormat::OGG) => read_vorbis(&path),
 		Some(AudioFormat::OPUS) => read_opus(&path),
 		Some(AudioFormat::WAVE) => read_id3(&path),
+		Some(AudioFormat::WEBM) | Some(AudioFormat::MKA) => read_webm(&path),
 		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path),
 		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path),
 		None => return None,
@@ -256,6 +257,74 @@ fn read_opus<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	Ok(metadata)
 }
 
+fn read_webm<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+	use symphonia::core::{
+		formats::FormatOptions,
+		io::{MediaSourceStream, MediaSourceStreamOptions},
+		meta::MetadataOptions,
+		probe::Hint,
+	};
+
+	let file = fs::File::open(path.as_ref()).map_err(|e| Error::Io(path.as_ref().to_owned(), e))?;
+	let stream = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+	let mut hint = Hint::new();
+	if let Some(extension) = path.as_ref().extension().and_then(|e| e.to_str()) {
+		hint.with_extension(extension);
+	}
+	let mut probed = symphonia::default::get_probe()
+		.format(
+			&hint,
+			stream,
+			&FormatOptions::default(),
+			&MetadataOptions::default(),
+		)
+		.map_err(Error::MediaProbe)?;
+
+	let mut metadata = SongMetadata::default();
+
+	let duration = probed
+		.format
+		.tracks()
+		.iter()
+		.find_map(|t| match (t.codec_params.time_base, t.codec_params.n_frames) {
+			(Some(tb), Some(n)) => Some(tb.calc_time(n).seconds as u32),
+			_ => None,
+		});
+	metadata.duration = duration;
+
+	if let Some(revision) = probed.format.metadata().current() {
+		metadata.has_artwork = !revision.visuals().is_empty();
+		for tag in revision.tags() {
+			let value = tag.value.to_string();
+			let key = tag.key.as_str();
+			utils::match_ignore_case! {
+				match key {
+					"TITLE" => metadata.title = Some(value),
+					"ALBUM" => metadata.album = Some(value),
+					"ARTIST" => metadata.artists.push(value),
+					"ALBUMARTIST" => metadata.album_artists.push(value),
+					"ALBUM_ARTIST" => metadata.album_artists.push(value),
+					"TRACKNUMBER" => metadata.track_number = value.parse::<u32>().ok(),
+					"TRACK" => metadata.track_number = value.parse::<u32>().ok(),
+					"PART_NUMBER" => metadata.track_number = value.parse::<u32>().ok(),
+					"DISCNUMBER" => metadata.disc_number = value.parse::<u32>().ok(),
+					"DISC" => metadata.disc_number = value.parse::<u32>().ok(),
+					"DATE" => metadata.year = parse_year(&value),
+					"DATE_RELEASED" => metadata.year = parse_year(&value),
+					"LYRICIST" => metadata.lyricists.push(value),
+					"COMPOSER" => metadata.composers.push(value),
+					"GENRE" => metadata.genres.push(value),
+					"PUBLISHER" => metadata.labels.push(value),
+					"LABEL" => metadata.labels.push(value),
+					_ => (),
+				}
+			}
+		}
+	}
+
+	Ok(metadata)
+}
+
 fn read_flac<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	let tag = metaflac::Tag::read_from_path(&path)
 		.map_err(|e| Error::Metaflac(path.as_ref().to_owned(), e))?;
@@ -371,6 +440,24 @@ fn reads_file_metadata() {
 	assert_eq!(
 		read_metadata(Path::new("test-data/formats/sample.wav")).unwrap(),
 		expected_without_duration
+	);
+	// symphonia does not expose the Matroska Segment Info title (which is where
+	// ffmpeg writes it), only SimpleTag entries, so title is not read for this fixture.
+	assert_eq!(
+		read_metadata(Path::new("test-data/formats/sample.webm")).unwrap(),
+		SongMetadata {
+			title: None,
+			duration: Some(1),
+			..expected_without_duration.clone()
+		}
+	);
+	assert_eq!(
+		read_metadata(Path::new("test-data/formats/sample.mka")).unwrap(),
+		SongMetadata {
+			title: None,
+			duration: Some(1),
+			..expected_without_duration
+		}
 	);
 }
 
