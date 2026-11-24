@@ -37,7 +37,7 @@ pub fn read_metadata<P: AsRef<Path>>(path: P) -> Option<SongMetadata> {
 		Some(AudioFormat::OGG) => read_vorbis(&path),
 		Some(AudioFormat::OPUS) => read_opus(&path),
 		Some(AudioFormat::WAVE) => read_id3(&path),
-		Some(AudioFormat::WEBM) => read_webm(&path),
+		Some(AudioFormat::WEBM) | Some(AudioFormat::MKA) => read_webm(&path),
 		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path),
 		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path),
 		None => return None,
@@ -268,7 +268,9 @@ fn read_webm<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	let file = fs::File::open(path.as_ref()).map_err(|e| Error::Io(path.as_ref().to_owned(), e))?;
 	let stream = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 	let mut hint = Hint::new();
-	hint.with_extension("webm");
+	if let Some(extension) = path.as_ref().extension().and_then(|e| e.to_str()) {
+		hint.with_extension(extension);
+	}
 	let mut probed = symphonia::default::get_probe()
 		.format(
 			&hint,
@@ -443,6 +445,14 @@ fn reads_file_metadata() {
 	// ffmpeg writes it), only SimpleTag entries, so title is not read for this fixture.
 	assert_eq!(
 		read_metadata(Path::new("test-data/formats/sample.webm")).unwrap(),
+		SongMetadata {
+			title: None,
+			duration: Some(1),
+			..expected_without_duration.clone()
+		}
+	);
+	assert_eq!(
+		read_metadata(Path::new("test-data/formats/sample.mka")).unwrap(),
 		SongMetadata {
 			title: None,
 			duration: Some(1),
