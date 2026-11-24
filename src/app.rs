@@ -61,6 +61,10 @@ pub enum Error {
 	MediaPacket(symphonia::core::errors::Error),
 	#[error(transparent)]
 	MediaProbe(symphonia::core::errors::Error),
+	#[error("Opus decoding error: {0}")]
+	OpusDecoder(opus_decoder::OpusError),
+	#[error("Opus streams with {0} channels are not supported")]
+	OpusChannelCount(usize),
 
 	#[error(transparent)]
 	PeaksSerialization(bitcode::Error),
