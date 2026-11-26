@@ -28,6 +28,12 @@ const API_KEY_LAST_USED_GRANULARITY_SECS: i64 = 60 * 60;
 const API_KEY_ID_LENGTH: usize = 16;
 const MAX_RATING: u8 = 5;
 
+/// The URL-safe alphabet used by NanoID. It has exactly 64 symbols, so each one can be picked
+/// from 6 bits of a random byte without any modulo bias.
+const ID_ALPHABET: &[u8; 64] = b"useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+/// 21 symbols of 6 bits each: 126 bits of randomness, the NanoID default.
+const ID_LENGTH: usize = 21;
+
 pub mod v1 {
 	use super::*;
 
@@ -218,6 +224,20 @@ fn random_hex(num_bytes: usize) -> Result<String, Error> {
 		.try_fill_bytes(&mut bytes)
 		.map_err(|_| Error::EntropyUnavailable)?;
 	Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Generates the random part of an object ID (NanoID style) from the operating system's
+/// cryptographically secure random number generator. Fails rather than falling back to a
+/// weaker source if the OS cannot provide randomness.
+fn random_id() -> Result<String, Error> {
+	let mut bytes = [0u8; ID_LENGTH];
+	SysRng
+		.try_fill_bytes(&mut bytes)
+		.map_err(|_| Error::EntropyUnavailable)?;
+	Ok(bytes
+		.iter()
+		.map(|b| ID_ALPHABET[(b & 0x3f) as usize] as char)
+		.collect())
 }
 
 fn hash_api_key(key: &str) -> String {
@@ -431,7 +451,7 @@ impl Manager {
 					*id = Some(new_id.clone());
 					continue;
 				}
-				let new_id = format!("{}-{}", kind.prefix(), random_hex(16)?);
+				let new_id = format!("{}_{}", kind.prefix(), random_id()?);
 				t.insert(ObjectIdModel {
 					id: new_id.clone(),
 					lookup: lookup.clone(),
@@ -828,7 +848,7 @@ mod test {
 			.get_or_create_id(ObjectKind::Song, "music/a/b.mp3")
 			.await
 			.unwrap();
-		assert!(song.starts_with("so-"));
+		assert!(song.starts_with("so_"));
 		assert_eq!(
 			state
 				.get_or_create_id(ObjectKind::Song, "music/a/b.mp3")
@@ -843,7 +863,7 @@ mod test {
 			.await
 			.unwrap();
 		assert_ne!(album, song);
-		assert!(album.starts_with("al-"));
+		assert!(album.starts_with("al_"));
 
 		assert_eq!(
 			state.resolve_id(&song).await.unwrap(),
@@ -853,7 +873,7 @@ mod test {
 			state.resolve_id(&album).await.unwrap(),
 			Some((ObjectKind::Album, "music/a/b.mp3".to_owned()))
 		);
-		assert_eq!(state.resolve_id("so-unknown").await.unwrap(), None);
+		assert_eq!(state.resolve_id("so_unknown").await.unwrap(), None);
 		assert_eq!(state.resolve_id("").await.unwrap(), None);
 	}
 
@@ -1122,5 +1142,112 @@ mod test {
 				.entries,
 			vec![id]
 		);
+	}
+
+	#[test]
+	fn id_alphabet_is_the_64_symbol_url_safe_nanoid_alphabet() {
+		assert_eq!(ID_ALPHABET.len(), 64);
+		let unique: std::collections::HashSet<_> = ID_ALPHABET.iter().collect();
+		assert_eq!(unique.len(), 64);
+		assert!(ID_ALPHABET
+			.iter()
+			.all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-'));
+	}
+
+	#[test]
+	fn random_ids_have_the_expected_shape_and_never_repeat() {
+		let mut seen = std::collections::HashSet::new();
+		for _ in 0..20_000 {
+			let id = random_id().unwrap();
+			assert_eq!(id.len(), ID_LENGTH);
+			assert!(id.bytes().all(|c| ID_ALPHABET.contains(&c)));
+			assert!(seen.insert(id), "random_id produced a duplicate");
+		}
+	}
+
+	#[test]
+	fn random_ids_use_every_symbol_uniformly() {
+		// Chi-squared goodness of fit against a uniform distribution over the 64 symbols.
+		// With 63 degrees of freedom the 0.001 critical value is about 103, so the generous
+		// limit below makes a false failure vanishingly unlikely while still catching a
+		// biased or constant generator (which scores in the tens of thousands).
+		let mut counts = [0u64; 64];
+		let samples = 20_000;
+		for _ in 0..samples {
+			for c in random_id().unwrap().bytes() {
+				let index = ID_ALPHABET.iter().position(|a| *a == c).unwrap();
+				counts[index] += 1;
+			}
+		}
+		let total = (samples * ID_LENGTH) as f64;
+		let expected = total / 64.0;
+		let chi_squared: f64 = counts
+			.iter()
+			.map(|c| {
+				let d = *c as f64 - expected;
+				d * d / expected
+			})
+			.sum();
+		assert!(counts.iter().all(|c| *c > 0), "a symbol was never produced");
+		assert!(chi_squared < 140.0, "chi-squared too high: {chi_squared}");
+	}
+
+	#[test]
+	fn random_ids_are_uniform_at_every_position() {
+		// A flaw such as a weak first character would hide in the aggregate test above.
+		let samples = 30_000;
+		let mut counts = vec![[0u32; 64]; ID_LENGTH];
+		for _ in 0..samples {
+			for (position, c) in random_id().unwrap().bytes().enumerate() {
+				let index = ID_ALPHABET.iter().position(|a| *a == c).unwrap();
+				counts[position][index] += 1;
+			}
+		}
+		let expected = samples as f64 / 64.0;
+		for (position, row) in counts.iter().enumerate() {
+			let chi_squared: f64 = row
+				.iter()
+				.map(|c| {
+					let d = *c as f64 - expected;
+					d * d / expected
+				})
+				.sum();
+			assert!(
+				chi_squared < 140.0,
+				"position {position} is not uniform: {chi_squared}"
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn object_ids_use_prefix_underscore_and_nanoid_part() {
+		let (state, _) = manager(test_name!());
+		for (kind, prefix) in [
+			(ObjectKind::Song, "so"),
+			(ObjectKind::Album, "al"),
+			(ObjectKind::Artist, "ar"),
+			(ObjectKind::Playlist, "pl"),
+			(ObjectKind::Directory, "di"),
+		] {
+			let id = state.get_or_create_id(kind, "key").await.unwrap();
+			assert_eq!(id.len(), 3 + ID_LENGTH);
+			assert_eq!(&id[..3], format!("{prefix}_"));
+			assert!(id[3..].bytes().all(|c| ID_ALPHABET.contains(&c)));
+			// IDs are case sensitive: changing the case must not resolve to the same object.
+			let flipped: String = id
+				.chars()
+				.map(|c| {
+					if c.is_ascii_lowercase() {
+						c.to_ascii_uppercase()
+					} else {
+						c.to_ascii_lowercase()
+					}
+				})
+				.collect();
+			if flipped != id {
+				assert_eq!(state.resolve_id(&flipped).await.unwrap(), None);
+			}
+			assert!(state.resolve_id(&id).await.unwrap().is_some());
+		}
 	}
 }
