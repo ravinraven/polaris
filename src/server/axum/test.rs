@@ -38,7 +38,7 @@ impl TestService for AxumTestService {
 		let app = App::new(socket_address, paths).await.unwrap();
 		let router = make_router(app);
 		let make_service = ServiceExt::<axum::extract::Request>::into_make_service(router);
-		let server = TestServer::new(make_service).unwrap();
+		let server = TestServer::new(make_service);
 
 		AxumTestService {
 			authorization: None,

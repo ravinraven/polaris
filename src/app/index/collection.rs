@@ -171,7 +171,7 @@ impl Collection {
 		let shuffled = {
 			let mut rng = match seed {
 				Some(seed) => StdRng::seed_from_u64(seed),
-				None => StdRng::from_entropy(),
+				None => rand::make_rng::<StdRng>(),
 			};
 			let mut s = self.albums.keys().collect::<Vec<_>>();
 			s.shuffle(&mut rng);

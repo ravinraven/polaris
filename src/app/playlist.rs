@@ -345,7 +345,10 @@ fn read_zipped_playlists(data: &Vec<u8>) -> Vec<Result<(String, String), Error>>
 			zip.by_index(i)
 				.map_err(|_| Error::PlaylistImportZip)
 				.and_then(|mut file| {
-					let filename = file.name().to_owned();
+					let filename = file
+						.name()
+						.map_err(|_| Error::PlaylistImportZip)?
+						.into_owned();
 					let mut content = String::new();
 					file.read_to_string(&mut content)
 						.map_err(|_| Error::InvalidPlaylistTextEncoding(filename.clone()))?;

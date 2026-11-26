@@ -5,6 +5,11 @@
 ### Server
 
 - Authentication tokens are now invalidated when a user changes their password.
+- Updated dependencies to their latest versions, including security fixes for the `zip`, `rustls`, `rustls-webpki`, `url`, `cookie`, `crossbeam-epoch` and `zstd` crates (see `cargo audit`).
+- Fixed a crash when a search query contained a number too large to fit in 32 bits (eg. `year = 99999999999`). Such queries now return an error.
+- Fixed a race where a configuration change (eg. adding a user) could be overwritten by a reload of the configuration file triggered by the file watcher.
+- Added support for `webm` and `mka` files.
+- Waveforms are now generated for `opus` files and for Opus audio in `webm` and `mka` files.
 
 ### General
 

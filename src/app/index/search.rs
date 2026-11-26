@@ -34,7 +34,10 @@ impl Search {
 		query: &str,
 	) -> Result<Vec<PathBuf>, Error> {
 		let parser = make_parser();
-		let parsed_query = parser.parse(query).map_err(|_| Error::SearchQueryParse)?;
+		let parsed_query = parser
+			.parse(query)
+			.into_result()
+			.map_err(|_| Error::SearchQueryParse)?;
 
 		let mut songs = self
 			.eval(dictionary, &parsed_query)

@@ -5,12 +5,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use symphonia::core::{
-	audio::SampleBuffer,
-	codecs::{DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_OPUS},
-	formats::FormatOptions,
+	audio::{sample::Sample, GenericAudioBufferRef},
+	codecs::audio::{well_known::CODEC_ID_OPUS, AudioDecoderOptions},
+	formats::{probe::Hint, FormatOptions, TrackType},
 	io::{MediaSourceStream, MediaSourceStreamOptions},
 	meta::MetadataOptions,
-	probe::Hint,
 };
 use tokio::{io::AsyncWriteExt, task::spawn_blocking};
 
@@ -99,32 +98,33 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 	let media_source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
 	let mut format = symphonia::default::get_probe()
-		.format(
+		.probe(
 			&Hint::new(),
 			media_source,
-			&FormatOptions::default(),
-			&MetadataOptions::default(),
+			FormatOptions::default(),
+			MetadataOptions::default(),
 		)
-		.map_err(Error::MediaProbe)?
-		.format;
+		.map_err(Error::MediaProbe)?;
 
 	let track = format
-		.tracks()
-		.iter()
-		.find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+		.default_track(TrackType::Audio)
 		.ok_or_else(|| Error::MediaEmpty(audio_path.to_owned()))?;
-
 	let track_id = track.id;
-	let is_opus = track.codec_params.codec == CODEC_TYPE_OPUS;
+	let audio_params = track
+		.codec_params
+		.as_ref()
+		.and_then(|p| p.audio())
+		.ok_or_else(|| Error::MediaEmpty(audio_path.to_owned()))?
+		.clone();
 
 	let mut accumulator = Accumulator::default();
 
 	// symphonia does not ship an Opus decoder, so Opus streams (in Ogg or
 	// Matroska/WebM containers) are decoded with a pure-Rust Opus decoder instead.
-	if is_opus {
-		let num_channels = track
-			.codec_params
+	if audio_params.codec == CODEC_ID_OPUS {
+		let num_channels = audio_params
 			.channels
+			.as_ref()
 			.map(|c| c.count())
 			.unwrap_or(2);
 		if !(1..=2).contains(&num_channels) {
@@ -137,24 +137,15 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 		let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * num_channels];
 		let mut samples = Vec::with_capacity(pcm.len());
 
-		loop {
-			let packet = match format.next_packet() {
-				Ok(packet) => packet,
-				Err(symphonia::core::errors::Error::IoError(e))
-					if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-				{
-					break;
-				}
-				Err(e) => return Err(Error::MediaPacket(e)),
-			};
-			if packet.track_id() != track_id {
+		while let Some(packet) = next_packet(format.as_mut())? {
+			if packet.track_id != track_id {
 				continue;
 			}
 			let Ok(num_decoded) = decoder.decode(&packet.data, &mut pcm, false) else {
 				continue;
 			};
 			samples.clear();
-			// Same conversion as symphonia's SampleBuffer<u8>: keep the top 8 bits, unsigned.
+			// Same conversion as symphonia's u8 samples: keep the top 8 bits, unsigned.
 			samples.extend(
 				pcm[..num_decoded * num_channels]
 					.iter()
@@ -167,37 +158,43 @@ fn compute_peaks(audio_path: &Path) -> Result<Peaks, Error> {
 	}
 
 	let mut decoder = symphonia::default::get_codecs()
-		.make(&track.codec_params, &DecoderOptions::default())
+		.make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
 		.map_err(Error::MediaDecoder)?;
 
-	loop {
-		let packet = match format.next_packet() {
-			Ok(packet) => packet,
-			Err(symphonia::core::errors::Error::IoError(e))
-				if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-			{
-				break;
-			}
-			Err(e) => return Err(Error::MediaPacket(e)),
-		};
-
-		if packet.track_id() != track_id {
+	let mut samples: Vec<u8> = Vec::new();
+	while let Some(packet) = next_packet(format.as_mut())? {
+		if packet.track_id != track_id {
 			continue;
 		}
 
-		let decoded = match decoder.decode(&packet) {
+		let decoded: GenericAudioBufferRef = match decoder.decode(&packet) {
 			Ok(d) => d,
 			Err(_) => continue,
 		};
 
-		let num_channels = decoded.spec().channels.count();
-		let sample_rate = decoded.spec().rate;
-		let mut buffer = SampleBuffer::<u8>::new(decoded.capacity() as u64, *decoded.spec());
-		buffer.copy_interleaved_ref(decoded);
-		accumulator.ingest(buffer.samples(), num_channels, sample_rate, peaks_per_minute);
+		let num_channels = decoded.spec().channels().count();
+		let sample_rate = decoded.spec().rate();
+		samples.resize(decoded.samples_interleaved(), u8::MID);
+		decoded.copy_to_slice_interleaved(&mut samples);
+		accumulator.ingest(&samples, num_channels, sample_rate, peaks_per_minute);
 	}
 
 	Ok(accumulator.peaks)
+}
+
+/// Reads the next packet, treating the end of the stream as `None`.
+fn next_packet(
+	format: &mut dyn symphonia::core::formats::FormatReader,
+) -> Result<Option<symphonia::core::packet::Packet>, Error> {
+	match format.next_packet() {
+		Ok(packet) => Ok(packet),
+		Err(symphonia::core::errors::Error::IoError(e))
+			if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+		{
+			Ok(None)
+		}
+		Err(e) => Err(Error::MediaPacket(e)),
+	}
 }
 
 struct Accumulator {
@@ -270,7 +267,7 @@ mod test {
 			let peaks = compute_peaks(Path::new(path)).unwrap();
 			assert!(!peaks.interleaved.is_empty(), "no peaks for {path}");
 			assert!(
-				peaks.interleaved.chunks_exact(2).any(|p| p[0] != p[1]),
+				peaks.interleaved.iter().min() != peaks.interleaved.iter().max(),
 				"peaks for {path} are flat, audio was probably not decoded"
 			);
 		}

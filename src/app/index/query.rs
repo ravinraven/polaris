@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use chumsky::{
 	error::Simple,
-	prelude::{choice, end, filter, just, none_of, recursive},
-	text::{int, keyword, whitespace, TextParser},
-	Parser,
+	extra,
+	prelude::{any, choice, end, just, none_of, recursive},
+	text::{int, keyword, whitespace},
+	IterParser, Parser,
 };
 use enum_map::Enum;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ pub enum Expr {
 	Combined(Box<Expr>, BoolOp, Box<Expr>),
 }
 
-pub fn make_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
+pub fn make_parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Simple<'a, char>>> {
 	recursive(|expr| {
 		let quoted_str = just('"')
 			.ignore_then(none_of('"').repeated().collect::<String>())
@@ -73,14 +74,21 @@ pub fn make_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 		let symbols = r#"()<>"|&=!"#.chars().collect::<HashSet<_>>();
 
-		let raw_str = filter(move |c: &char| !c.is_whitespace() && !symbols.contains(c))
+		let raw_str = any()
+			.filter(move |c: &char| !c.is_whitespace() && !symbols.contains(c))
 			.repeated()
 			.at_least(1)
 			.collect::<String>();
 
 		let str_ = choice((quoted_str, raw_str)).padded();
 
-		let number = int(10).from_str().unwrapped().padded();
+		// Numbers that do not fit in an i32 are a parse error rather than a panic.
+		let number = int(10)
+			.to_slice()
+			.try_map(|digits: &str, span| {
+				digits.parse::<i32>().map_err(|_| Simple::new(None, span))
+			})
+			.padded();
 
 		let text_field = choice((
 			keyword("album").to(TextField::Album),
@@ -138,13 +146,14 @@ pub fn make_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 		let combined = atom
 			.clone()
-			.then(bool_op.then(atom).repeated())
-			.foldl(|a, (b, c)| Expr::Combined(Box::new(a), b, Box::new(c)));
+			.foldl(bool_op.then(atom).repeated(), |a, (b, c)| {
+				Expr::Combined(Box::new(a), b, Box::new(c))
+			});
 
-		let implicit_and = combined
-			.clone()
-			.then(whitespace().ignore_then(combined).repeated())
-			.foldl(|a: Expr, b: Expr| Expr::Combined(Box::new(a), BoolOp::And, Box::new(b)));
+		let implicit_and = combined.clone().foldl(
+			whitespace().ignore_then(combined).repeated(),
+			|a: Expr, b: Expr| Expr::Combined(Box::new(a), BoolOp::And, Box::new(b)),
+		);
 
 		implicit_and
 	})
@@ -155,11 +164,11 @@ pub fn make_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 fn can_parse_fuzzy_query() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"rhapsody"#).unwrap(),
+		parser.parse(r#"rhapsody"#).into_result().unwrap(),
 		Expr::Fuzzy(Literal::Text("rhapsody".to_owned())),
 	);
 	assert_eq!(
-		parser.parse(r#"2005"#).unwrap(),
+		parser.parse(r#"2005"#).into_result().unwrap(),
 		Expr::Fuzzy(Literal::Number(2005)),
 	);
 }
@@ -168,7 +177,10 @@ fn can_parse_fuzzy_query() {
 fn can_repeat_fuzzy_queries() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"rhapsody "of victory""#).unwrap(),
+		parser
+			.parse(r#"rhapsody "of victory""#)
+			.into_result()
+			.unwrap(),
 		Expr::Combined(
 			Box::new(Expr::Fuzzy(Literal::Text("rhapsody".to_owned()))),
 			BoolOp::And,
@@ -181,7 +193,10 @@ fn can_repeat_fuzzy_queries() {
 fn can_mix_fuzzy_and_structured() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"rhapsody album % dragonflame"#).unwrap(),
+		parser
+			.parse(r#"rhapsody album % dragonflame"#)
+			.into_result()
+			.unwrap(),
 		Expr::Combined(
 			Box::new(Expr::Fuzzy(Literal::Text("rhapsody".to_owned()))),
 			BoolOp::And,
@@ -198,35 +213,56 @@ fn can_mix_fuzzy_and_structured() {
 fn can_parse_text_fields() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"album = "legendary tales""#).unwrap(),
+		parser
+			.parse(r#"album = "legendary tales""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Album, TextOp::Eq, "legendary tales".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"albumartist = "rhapsody""#).unwrap(),
+		parser
+			.parse(r#"albumartist = "rhapsody""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::AlbumArtist, TextOp::Eq, "rhapsody".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"artist = "rhapsody""#).unwrap(),
+		parser
+			.parse(r#"artist = "rhapsody""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Artist, TextOp::Eq, "rhapsody".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"composer = "yoko kanno""#).unwrap(),
+		parser
+			.parse(r#"composer = "yoko kanno""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Composer, TextOp::Eq, "yoko kanno".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"genre = "jazz""#).unwrap(),
+		parser.parse(r#"genre = "jazz""#).into_result().unwrap(),
 		Expr::TextCmp(TextField::Genre, TextOp::Eq, "jazz".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"label = "diverse system""#).unwrap(),
+		parser
+			.parse(r#"label = "diverse system""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Label, TextOp::Eq, "diverse system".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"lyricist = "dalida""#).unwrap(),
+		parser
+			.parse(r#"lyricist = "dalida""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Lyricist, TextOp::Eq, "dalida".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"path = "electronic/big beat""#).unwrap(),
+		parser
+			.parse(r#"path = "electronic/big beat""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(
 			TextField::Path,
 			TextOp::Eq,
@@ -234,7 +270,10 @@ fn can_parse_text_fields() {
 		),
 	);
 	assert_eq!(
-		parser.parse(r#"title = "emerald sword""#).unwrap(),
+		parser
+			.parse(r#"title = "emerald sword""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Title, TextOp::Eq, "emerald sword".to_owned()),
 	);
 }
@@ -243,11 +282,17 @@ fn can_parse_text_fields() {
 fn can_parse_text_operators() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"album = "legendary tales""#).unwrap(),
+		parser
+			.parse(r#"album = "legendary tales""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Album, TextOp::Eq, "legendary tales".to_owned()),
 	);
 	assert_eq!(
-		parser.parse(r#"album % "legendary tales""#).unwrap(),
+		parser
+			.parse(r#"album % "legendary tales""#)
+			.into_result()
+			.unwrap(),
 		Expr::TextCmp(TextField::Album, TextOp::Like, "legendary tales".to_owned()),
 	);
 }
@@ -256,15 +301,15 @@ fn can_parse_text_operators() {
 fn can_parse_number_fields() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"discnumber = 6"#).unwrap(),
+		parser.parse(r#"discnumber = 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::Eq, 6),
 	);
 	assert_eq!(
-		parser.parse(r#"tracknumber = 12"#).unwrap(),
+		parser.parse(r#"tracknumber = 12"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::TrackNumber, NumberOp::Eq, 12),
 	);
 	assert_eq!(
-		parser.parse(r#"year = 1999"#).unwrap(),
+		parser.parse(r#"year = 1999"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::Year, NumberOp::Eq, 1999),
 	);
 }
@@ -273,23 +318,23 @@ fn can_parse_number_fields() {
 fn can_parse_number_operators() {
 	let parser = make_parser();
 	assert_eq!(
-		parser.parse(r#"discnumber = 6"#).unwrap(),
+		parser.parse(r#"discnumber = 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::Eq, 6),
 	);
 	assert_eq!(
-		parser.parse(r#"discnumber > 6"#).unwrap(),
+		parser.parse(r#"discnumber > 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::Greater, 6),
 	);
 	assert_eq!(
-		parser.parse(r#"discnumber >= 6"#).unwrap(),
+		parser.parse(r#"discnumber >= 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::GreaterOrEq, 6),
 	);
 	assert_eq!(
-		parser.parse(r#"discnumber < 6"#).unwrap(),
+		parser.parse(r#"discnumber < 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::Less, 6),
 	);
 	assert_eq!(
-		parser.parse(r#"discnumber <= 6"#).unwrap(),
+		parser.parse(r#"discnumber <= 6"#).into_result().unwrap(),
 		Expr::NumberCmp(NumberField::DiscNumber, NumberOp::LessOrEq, 6),
 	);
 }
@@ -299,7 +344,10 @@ fn can_use_and_operator() {
 	let parser = make_parser();
 
 	assert_eq!(
-		parser.parse(r#"album % lands && title % "sword""#).unwrap(),
+		parser
+			.parse(r#"album % lands && title % "sword""#)
+			.into_result()
+			.unwrap(),
 		Expr::Combined(
 			Box::new(Expr::TextCmp(
 				TextField::Album,
@@ -321,7 +369,10 @@ fn can_use_or_operator() {
 	let parser = make_parser();
 
 	assert_eq!(
-		parser.parse(r#"album % lands || title % "sword""#).unwrap(),
+		parser
+			.parse(r#"album % lands || title % "sword""#)
+			.into_result()
+			.unwrap(),
 		Expr::Combined(
 			Box::new(Expr::TextCmp(
 				TextField::Album,
@@ -343,7 +394,10 @@ fn can_use_not_operator() {
 	let parser = make_parser();
 
 	assert_eq!(
-		parser.parse(r#"album % lands !! title % "sword""#).unwrap(),
+		parser
+			.parse(r#"album % lands !! title % "sword""#)
+			.into_result()
+			.unwrap(),
 		Expr::Combined(
 			Box::new(Expr::TextCmp(
 				TextField::Album,
@@ -475,4 +529,38 @@ fn can_use_parenthesis_for_precedence() {
 			))
 		),
 	);
+}
+
+#[test]
+fn rejects_numbers_that_overflow() {
+	let parser = make_parser();
+	assert!(parser.parse("year = 99999999999").into_result().is_err());
+	// A bare number that is too large to be a number is searched for as text.
+	assert_eq!(
+		parser.parse("99999999999").into_result().unwrap(),
+		Expr::Fuzzy(Literal::Text("99999999999".to_owned())),
+	);
+	assert!(parser.parse("year = 2147483648").into_result().is_err());
+	assert_eq!(
+		parser.parse("year = 2147483647").into_result().unwrap(),
+		Expr::NumberCmp(NumberField::Year, NumberOp::Eq, i32::MAX),
+	);
+}
+
+#[test]
+fn rejects_malformed_queries() {
+	let parser = make_parser();
+	for query in [
+		"(album % x",
+		"album % x)",
+		"()",
+		"&&",
+		"a &&",
+		"\"unterminated",
+	] {
+		assert!(
+			parser.parse(query).into_result().is_err(),
+			"expected `{query}` to be rejected"
+		);
+	}
 }
