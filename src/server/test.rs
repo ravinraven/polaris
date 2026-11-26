@@ -11,6 +11,7 @@ pub mod constants;
 pub mod protocol;
 
 mod admin;
+mod api_keys;
 mod auth;
 mod browser;
 mod collection;

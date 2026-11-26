@@ -29,6 +29,12 @@ pub enum APIError {
 	DirectoryNotFound(PathBuf),
 	#[error("Artist not found")]
 	ArtistNotFound,
+	#[error("API key not found")]
+	ApiKeyNotFound,
+	#[error("API key labels must be between 1 and 100 characters")]
+	InvalidApiKeyLabel,
+	#[error("Too many API keys, revoke some before creating more")]
+	TooManyApiKeys,
 	#[error("Album not found")]
 	AlbumNotFound,
 	#[error("Genre not found")]

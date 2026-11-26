@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::app::{config, index, peaks, playlist, scanner, thumbnail};
+use crate::app::{config, index, peaks, playlist, scanner, state, thumbnail};
 use std::{collections::HashMap, convert::From, path::PathBuf, time::UNIX_EPOCH};
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, ToSchema)]
@@ -139,6 +139,57 @@ impl From<config::User> for User {
 		Self {
 			name: u.name,
 			is_admin: u.admin == Some(true),
+		}
+	}
+}
+
+/// An API key of the current user, as listed by the server. The key itself is never included.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ApiKey {
+	/// Identifies the key (eg. to revoke it). This is not the key and cannot be used to sign in.
+	#[schema(examples("5d41402abc4b2a76"))]
+	pub id: String,
+	#[schema(examples("My phone"))]
+	pub label: String,
+	/// Creation time, in seconds since the Unix epoch.
+	#[schema(examples(1767225600))]
+	pub created_at: i64,
+	/// Last time the key was used (at most hourly precision), in seconds since the Unix epoch.
+	pub last_used_at: Option<i64>,
+}
+
+impl From<state::ApiKeyInfo> for ApiKey {
+	fn from(k: state::ApiKeyInfo) -> Self {
+		Self {
+			id: k.id,
+			label: k.label,
+			created_at: k.created_at,
+			last_used_at: k.last_used_at,
+		}
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NewApiKey {
+	/// A name to recognize the key by, between 1 and 100 characters.
+	#[schema(examples("My phone"))]
+	pub label: String,
+}
+
+/// A newly created API key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CreatedApiKey {
+	#[serde(flatten)]
+	pub api_key: ApiKey,
+	/// The secret key. This is the only time it is returned: the server keeps a hash of it.
+	pub key: String,
+}
+
+impl From<state::CreatedApiKey> for CreatedApiKey {
+	fn from(k: state::CreatedApiKey) -> Self {
+		Self {
+			api_key: k.info.into(),
+			key: k.key,
 		}
 	}
 }

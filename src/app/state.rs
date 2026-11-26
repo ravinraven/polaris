@@ -139,6 +139,13 @@ pub struct ApiKeyInfo {
 	pub last_used_at: Option<i64>,
 }
 
+/// A freshly created API key. This is the only time the key itself is available.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedApiKey {
+	pub key: String,
+	pub info: ApiKeyInfo,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
 	Song,
@@ -240,6 +247,10 @@ fn random_id() -> Result<String, Error> {
 		.collect())
 }
 
+fn api_key_id(key_hash: &str) -> String {
+	key_hash.chars().take(API_KEY_ID_LENGTH).collect()
+}
+
 fn hash_api_key(key: &str) -> String {
 	// API keys are long random secrets, so a fast hash is sufficient (unlike passwords).
 	Sha256::digest(key.as_bytes())
@@ -287,9 +298,9 @@ impl Manager {
 
 	// API keys
 
-	/// Creates an API key for a user and returns it. This is the only time the key is
-	/// available: only its hash is stored.
-	pub async fn create_api_key(&self, owner: &str, label: &str) -> Result<String, Error> {
+	/// Creates an API key for a user. The returned key is the only copy: only its hash is
+	/// stored.
+	pub async fn create_api_key(&self, owner: &str, label: &str) -> Result<CreatedApiKey, Error> {
 		let key = random_hex(32)?;
 		let model = ApiKeyModel {
 			key_hash: hash_api_key(&key),
@@ -298,8 +309,14 @@ impl Manager {
 			created_at: now(),
 			last_used_at: None,
 		};
+		let info = ApiKeyInfo {
+			id: api_key_id(&model.key_hash),
+			label: model.label.clone(),
+			created_at: model.created_at,
+			last_used_at: None,
+		};
 		self.write(move |t| t.insert(model).map_err(db_err)).await?;
-		Ok(key)
+		Ok(CreatedApiKey { key, info })
 	}
 
 	/// Returns the owner of an API key, or `None` if the key is not valid.
@@ -354,7 +371,7 @@ impl Manager {
 				.map_err(db_err)?
 				.filter_map(|k| k.ok())
 				.map(|k| ApiKeyInfo {
-					id: k.key_hash.chars().take(API_KEY_ID_LENGTH).collect(),
+					id: api_key_id(&k.key_hash),
 					label: k.label,
 					created_at: k.created_at,
 					last_used_at: k.last_used_at,
@@ -366,12 +383,14 @@ impl Manager {
 		.await
 	}
 
-	/// Revokes one of a user's keys. Returns `false` if the user has no such key.
+	/// Revokes one of a user's keys, identified by its exact id. Returns `false` if the user
+	/// has no such key.
 	pub async fn revoke_api_key(&self, owner: &str, id: &str) -> Result<bool, Error> {
 		let owner = owner.to_owned();
 		let id = id.to_owned();
 		self.write(move |t| {
-			if id.is_empty() {
+			// Only an exact id revokes a key, never a prefix of one.
+			if id.chars().count() != API_KEY_ID_LENGTH {
 				return Ok(false);
 			}
 			let found = t
@@ -792,8 +811,8 @@ mod test {
 	async fn api_keys_authenticate_list_and_revoke() {
 		let (state, _) = manager(test_name!());
 
-		let key = state.create_api_key("alice", "phone").await.unwrap();
-		let other = state.create_api_key("bob", "laptop").await.unwrap();
+		let key = state.create_api_key("alice", "phone").await.unwrap().key;
+		let other = state.create_api_key("bob", "laptop").await.unwrap().key;
 		assert_ne!(key, other);
 		assert_eq!(key.len(), 64);
 
@@ -827,9 +846,48 @@ mod test {
 	}
 
 	#[tokio::test]
+	async fn revoking_needs_the_exact_id_not_a_prefix() {
+		let (state, _) = manager(test_name!());
+		let created = state.create_api_key("alice", "phone").await.unwrap();
+		let id = created.info.id.clone();
+		assert_eq!(id.len(), API_KEY_ID_LENGTH);
+
+		for prefix_length in [1, 4, API_KEY_ID_LENGTH - 1] {
+			assert!(!state
+				.revoke_api_key("alice", &id[..prefix_length])
+				.await
+				.unwrap());
+		}
+		assert!(!state
+			.revoke_api_key("alice", &format!("{id}0"))
+			.await
+			.unwrap());
+		assert_eq!(
+			state.authenticate_api_key(&created.key).await.unwrap(),
+			Some("alice".to_owned())
+		);
+
+		assert!(state.revoke_api_key("alice", &id).await.unwrap());
+		assert_eq!(
+			state.authenticate_api_key(&created.key).await.unwrap(),
+			None
+		);
+	}
+
+	#[tokio::test]
+	async fn created_key_info_matches_the_listing() {
+		let (state, _) = manager(test_name!());
+		let created = state.create_api_key("alice", "phone").await.unwrap();
+		let listed = state.list_api_keys("alice").await.unwrap();
+		assert_eq!(listed, vec![created.info.clone()]);
+		assert_eq!(created.info.label, "phone");
+		assert_eq!(created.info.last_used_at, None);
+	}
+
+	#[tokio::test]
 	async fn api_keys_are_stored_hashed() {
 		let (state, _) = manager(test_name!());
-		let key = state.create_api_key("alice", "phone").await.unwrap();
+		let key = state.create_api_key("alice", "phone").await.unwrap().key;
 
 		let stored = state.list_api_keys("alice").await.unwrap();
 		assert!(!key.starts_with(&stored[0].id));
@@ -1101,7 +1159,7 @@ mod test {
 
 		let (key, id) = {
 			let state = Manager::new(ndb::Manager::new(&directory).unwrap());
-			let key = state.create_api_key("alice", "phone").await.unwrap();
+			let key = state.create_api_key("alice", "phone").await.unwrap().key;
 			let id = state
 				.get_or_create_id(ObjectKind::Song, "music/song.mp3")
 				.await

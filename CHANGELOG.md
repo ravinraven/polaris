@@ -9,6 +9,7 @@
 - Fixed a crash when a search query contained a number too large to fit in 32 bits (eg. `year = 99999999999`). Such queries now return an error.
 - Fixed a race where a configuration change (eg. adding a user) could be overwritten by a reload of the configuration file triggered by the file watcher.
 - Added support for `webm` and `mka` files.
+- Added API key management endpoints (`GET` and `POST` `/api/api_keys`, `DELETE` `/api/api_keys/{id}`), in preparation for OpenSubsonic support. Keys are only stored as hashes and shown once, when created. API version is now 8.2.
 - Waveforms are now generated for `opus` files and for Opus audio in `webm` and `mka` files.
 
 ### General
