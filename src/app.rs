@@ -2,8 +2,8 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 
 use crate::paths::Paths;
 
@@ -220,7 +220,9 @@ impl App {
 			)),
 			Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 				let mut secret = auth::Secret::default();
-				OsRng.fill_bytes(secret.as_mut());
+				SysRng
+					.try_fill_bytes(secret.as_mut())
+					.map_err(|_| Error::AuthenticationSecretInvalid)?;
 				tokio::fs::write(&path, &secret)
 					.await
 					.map_err(|_| Error::Io(path.to_owned(), e))?;

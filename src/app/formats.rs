@@ -259,10 +259,9 @@ fn read_opus<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 
 fn read_webm<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	use symphonia::core::{
-		formats::FormatOptions,
+		formats::{probe::Hint, FormatOptions},
 		io::{MediaSourceStream, MediaSourceStreamOptions},
-		meta::MetadataOptions,
-		probe::Hint,
+		meta::{MetadataOptions, RawValue},
 	};
 
 	let file = fs::File::open(path.as_ref()).map_err(|e| Error::Io(path.as_ref().to_owned(), e))?;
@@ -271,52 +270,58 @@ fn read_webm<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	if let Some(extension) = path.as_ref().extension().and_then(|e| e.to_str()) {
 		hint.with_extension(extension);
 	}
-	let mut probed = symphonia::default::get_probe()
-		.format(
+	let mut format = symphonia::default::get_probe()
+		.probe(
 			&hint,
 			stream,
-			&FormatOptions::default(),
-			&MetadataOptions::default(),
+			FormatOptions::default(),
+			MetadataOptions::default(),
 		)
 		.map_err(Error::MediaProbe)?;
 
 	let mut metadata = SongMetadata::default();
 
-	let duration = probed
-		.format
-		.tracks()
-		.iter()
-		.find_map(|t| match (t.codec_params.time_base, t.codec_params.n_frames) {
-			(Some(tb), Some(n)) => Some(tb.calc_time(n).seconds as u32),
-			_ => None,
-		});
-	metadata.duration = duration;
+	let media_info = format.media_info();
+	metadata.duration = media_info
+		.time_base
+		.zip(media_info.duration)
+		.and_then(|(time_base, duration)| time_base.calc_duration(duration))
+		.map(|time| time.as_secs() as u32);
 
-	if let Some(revision) = probed.format.metadata().current() {
-		metadata.has_artwork = !revision.visuals().is_empty();
-		for tag in revision.tags() {
-			let value = tag.value.to_string();
-			let key = tag.key.as_str();
-			utils::match_ignore_case! {
-				match key {
-					"TITLE" => metadata.title = Some(value),
-					"ALBUM" => metadata.album = Some(value),
-					"ARTIST" => metadata.artists.push(value),
-					"ALBUMARTIST" => metadata.album_artists.push(value),
-					"ALBUM_ARTIST" => metadata.album_artists.push(value),
-					"TRACKNUMBER" => metadata.track_number = value.parse::<u32>().ok(),
-					"TRACK" => metadata.track_number = value.parse::<u32>().ok(),
-					"PART_NUMBER" => metadata.track_number = value.parse::<u32>().ok(),
-					"DISCNUMBER" => metadata.disc_number = value.parse::<u32>().ok(),
-					"DISC" => metadata.disc_number = value.parse::<u32>().ok(),
-					"DATE" => metadata.year = parse_year(&value),
-					"DATE_RELEASED" => metadata.year = parse_year(&value),
-					"LYRICIST" => metadata.lyricists.push(value),
-					"COMPOSER" => metadata.composers.push(value),
-					"GENRE" => metadata.genres.push(value),
-					"PUBLISHER" => metadata.labels.push(value),
-					"LABEL" => metadata.labels.push(value),
-					_ => (),
+	if let Some(revision) = format.metadata().current() {
+		metadata.has_artwork = !revision.media.visuals.is_empty();
+		for tag in &revision.media.tags {
+			let values: Vec<String> = match &tag.raw.value {
+				RawValue::String(v) => vec![v.to_string()],
+				RawValue::StringList(v) => v.to_vec(),
+				RawValue::UnsignedInt(v) => vec![v.to_string()],
+				RawValue::SignedInt(v) => vec![v.to_string()],
+				_ => continue,
+			};
+			// Matroska keys are prefixed with their target level (eg. `ALBUM@ARTIST`).
+			let key = tag.raw.key.rsplit('@').next().unwrap_or(&tag.raw.key);
+			for value in values {
+				utils::match_ignore_case! {
+					match key {
+						"TITLE" => metadata.title = Some(value),
+						"ALBUM" => metadata.album = Some(value),
+						"ARTIST" => metadata.artists.push(value),
+						"ALBUMARTIST" => metadata.album_artists.push(value),
+						"ALBUM_ARTIST" => metadata.album_artists.push(value),
+						"TRACKNUMBER" => metadata.track_number = value.parse::<u32>().ok(),
+						"TRACK" => metadata.track_number = value.parse::<u32>().ok(),
+						"PART_NUMBER" => metadata.track_number = value.parse::<u32>().ok(),
+						"DISCNUMBER" => metadata.disc_number = value.parse::<u32>().ok(),
+						"DISC" => metadata.disc_number = value.parse::<u32>().ok(),
+						"DATE" => metadata.year = parse_year(&value),
+						"DATE_RELEASED" => metadata.year = parse_year(&value),
+						"LYRICIST" => metadata.lyricists.push(value),
+						"COMPOSER" => metadata.composers.push(value),
+						"GENRE" => metadata.genres.push(value),
+						"PUBLISHER" => metadata.labels.push(value),
+						"LABEL" => metadata.labels.push(value),
+						_ => (),
+					}
 				}
 			}
 		}
