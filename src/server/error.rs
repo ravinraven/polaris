@@ -125,6 +125,8 @@ impl From<app::Error> for APIError {
 			app::Error::MediaProbe(e) => APIError::AudioDecoding(e),
 			app::Error::OpusDecoder(_) => APIError::Internal,
 			app::Error::OpusChannelCount(_) => APIError::Internal,
+			app::Error::EntropyUnavailable => APIError::Internal,
+			app::Error::InvalidRating => APIError::Internal,
 
 			app::Error::PeaksSerialization(_) => APIError::Internal,
 			app::Error::PeaksDeserialization(_) => APIError::Internal,

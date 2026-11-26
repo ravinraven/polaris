@@ -171,6 +171,9 @@ impl Manager {
 		Ok(())
 	}
 
+	// Only used by tests: reloads go through `reload_config`, which holds the config lock
+	// while it reads the file.
+	#[cfg(test)]
 	pub async fn apply_config(&self, new_config: storage::Config) -> Result<(), Error> {
 		let mut config = self.config.write().await;
 		*config = new_config.try_into()?;
