@@ -244,6 +244,8 @@ pub struct NewSettings {
 	pub album_art_pattern: Option<String>,
 	#[schema(examples("https://myddnsprovider.com?token=abcdef"))]
 	pub ddns_update_url: Option<String>,
+	/// Serves the OpenSubsonic API at `/rest`. Disabled by default.
+	pub opensubsonic_enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -252,6 +254,9 @@ pub struct Settings {
 	pub album_art_pattern: String,
 	#[schema(examples("https://myddnsprovider.com?token=abcdef"))]
 	pub ddns_update_url: String,
+	/// Whether the OpenSubsonic API is served at `/rest`.
+	#[serde(default)]
+	pub opensubsonic_enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

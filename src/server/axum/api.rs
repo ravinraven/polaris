@@ -146,6 +146,7 @@ async fn get_settings(
 			.as_ref()
 			.map(http::Uri::to_string)
 			.unwrap_or_default(),
+		opensubsonic_enabled: config_manager.get_opensubsonic_enabled().await,
 	};
 	Ok(Json(settings))
 }
@@ -181,6 +182,10 @@ async fn put_settings(
 		};
 		config_manager.set_ddns_update_url(uri).await?;
 		ddns_manager.update_ddns().await?;
+	}
+
+	if let Some(enabled) = new_settings.opensubsonic_enabled {
+		config_manager.set_opensubsonic_enabled(enabled).await?;
 	}
 
 	Ok(())

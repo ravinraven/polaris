@@ -64,6 +64,7 @@ async fn put_settings_golden_path() {
 	let request = protocol::put_settings(dto::NewSettings {
 		album_art_pattern: Some("test_pattern".to_owned()),
 		ddns_update_url: Some("http://example.com/".to_owned()),
+		opensubsonic_enabled: None,
 	});
 	let response = service.fetch(&request).await;
 	assert_eq!(response.status(), StatusCode::OK);
@@ -76,6 +77,53 @@ async fn put_settings_golden_path() {
 		&Settings {
 			album_art_pattern: "test_pattern".to_owned(),
 			ddns_update_url: "http://example.com/".to_owned(),
+			opensubsonic_enabled: false,
 		},
 	);
+}
+
+#[tokio::test]
+async fn opensubsonic_is_disabled_by_default_and_can_be_toggled() {
+	let mut service = ServiceType::new(&test_name!()).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+
+	let response = service
+		.fetch_json::<_, dto::Settings>(&protocol::get_settings())
+		.await;
+	assert!(!response.body().opensubsonic_enabled);
+
+	let enable = |enabled| {
+		protocol::put_settings(dto::NewSettings {
+			opensubsonic_enabled: Some(enabled),
+			..Default::default()
+		})
+	};
+	let response = service.fetch(&enable(true)).await;
+	assert_eq!(response.status(), StatusCode::OK);
+	let response = service
+		.fetch_json::<_, dto::Settings>(&protocol::get_settings())
+		.await;
+	assert!(response.body().opensubsonic_enabled);
+
+	// Other settings are left alone when the field is absent, and vice versa.
+	let response = service
+		.fetch(&protocol::put_settings(dto::NewSettings {
+			album_art_pattern: Some("other".to_owned()),
+			..Default::default()
+		}))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	let response = service
+		.fetch_json::<_, dto::Settings>(&protocol::get_settings())
+		.await;
+	assert!(response.body().opensubsonic_enabled);
+	assert_eq!(response.body().album_art_pattern, "other");
+
+	let response = service.fetch(&enable(false)).await;
+	assert_eq!(response.status(), StatusCode::OK);
+	let response = service
+		.fetch_json::<_, dto::Settings>(&protocol::get_settings())
+		.await;
+	assert!(!response.body().opensubsonic_enabled);
 }
