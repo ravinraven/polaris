@@ -14,6 +14,7 @@ mod api;
 mod auth;
 mod error;
 mod logger;
+mod subsonic;
 mod version;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ pub fn make_router(app: App) -> NormalizePath<Router> {
 		.split_for_parts();
 
 	let router = open_api_router
+		.nest("/rest", subsonic::router())
 		.with_state(app.clone())
 		.merge(Scalar::with_url("/api-docs", open_api))
 		.fallback_service(static_files)

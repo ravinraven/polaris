@@ -28,6 +28,7 @@ The goals of this project are:
 - 🌊 Song audio-waveform visualization
 - 🏷️ Support for multi-value fields in song metadata (eg. multiple artists per song)
 - 🔍️ Powerful search functionality with per-field queries
+- 🔌 OpenSubsonic API for third-party apps (work in progress, see [docs/OPENSUBSONIC.md](docs/OPENSUBSONIC.md))
 - ⚙️ Plain-text configuration also editable with built-in UI
 - 👥 Setup multiple users, each with their own playlists
 - 📱 Listen to your music on the go:
