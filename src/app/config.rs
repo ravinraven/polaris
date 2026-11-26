@@ -144,8 +144,15 @@ impl Manager {
 	}
 
 	async fn reload_config(&self) -> Result<(), Error> {
-		let config = Self::read_config(&self.config_file_path).await?;
-		self.apply_config(config).await
+		// Hold the write lock while reading the file so that a reload can never observe
+		// (and then apply) the file in between an in-memory change and its save.
+		{
+			let mut config = self.config.write().await;
+			let new_config = Self::read_config(&self.config_file_path).await?;
+			*config = new_config.try_into()?;
+		}
+		self.change_notify.notify_waiters();
+		Ok(())
 	}
 
 	async fn read_config(config_file_path: &Path) -> Result<storage::Config, Error> {
@@ -155,11 +162,9 @@ impl Manager {
 		toml::de::from_str::<storage::Config>(&config_content).map_err(Error::ConfigDeserialization)
 	}
 
-	pub async fn save_config(&self) -> Result<(), Error> {
-		let serialized = toml::ser::to_string_pretty::<storage::Config>(
-			&self.config.read().await.clone().into(),
-		)
-		.map_err(Error::ConfigSerialization)?;
+	async fn write_config(&self, config: &Config) -> Result<(), Error> {
+		let serialized = toml::ser::to_string_pretty::<storage::Config>(&config.clone().into())
+			.map_err(Error::ConfigSerialization)?;
 		tokio::fs::write(&self.config_file_path, serialized.as_bytes())
 			.await
 			.map_err(|e| Error::Io(self.config_file_path.clone(), e))?;
@@ -185,13 +190,15 @@ impl Manager {
 		&self,
 		op: F,
 	) -> Result<(), Error> {
-		{
+		// The write lock is held until the new config is saved to disk, so that the file
+		// watcher cannot reload an out-of-date file over the in-memory change.
+		let saved = {
 			let mut config = self.config.write().await;
 			op(&mut config)?;
-		}
+			self.write_config(&config).await
+		};
 		self.change_notify.notify_waiters();
-		self.save_config().await?;
-		Ok(())
+		saved
 	}
 
 	pub async fn get_index_album_art_pattern(&self) -> Regex {
