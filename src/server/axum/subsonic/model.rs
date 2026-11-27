@@ -18,6 +18,7 @@ use crate::app::{
 
 use super::ctx::{internal, Ctx};
 use super::response::{Element, SubsonicError};
+use super::tags::{self, Extras};
 
 // Dates and file types
 
@@ -387,7 +388,7 @@ impl Mapper {
 	}
 
 	/// A song (`Child`).
-	pub fn song(&self, song: &Song, size: Option<u64>) -> Element {
+	pub fn song(&self, song: &Song, size: Option<u64>, extras: Option<&Extras>) -> Element {
 		let id = self.id(ObjectKind::Song, &song_key(song));
 		let (content_type, suffix) = audio_type(&song.virtual_path);
 		let album_id = song_album_key(song).map(|k| self.id(ObjectKind::Album, &k));
@@ -448,7 +449,23 @@ impl Mapper {
 				"displayComposer",
 				(!song.composers.is_empty()).then(|| join_names(&song.composers)),
 			);
-		let element = self.with_state(element, &id);
+		let mut element = self.with_state(element, &id);
+		if let Some(extras) = extras {
+			element = element
+				.attr_opt("bpm", extras.bpm)
+				.attr_opt("musicBrainzId", extras.musicbrainz_track_id.clone());
+			let gain = &extras.replay_gain;
+			if !gain.is_empty() {
+				element = element.object(
+					"replayGain",
+					Element::new()
+						.attr_opt("trackGain", gain.track_gain)
+						.attr_opt("albumGain", gain.album_gain)
+						.attr_opt("trackPeak", gain.track_peak)
+						.attr_opt("albumPeak", gain.album_peak),
+				);
+			}
+		}
 
 		let contributors = song
 			.composers
@@ -475,7 +492,7 @@ impl Mapper {
 			.list("contributors", contributors)
 	}
 
-	/// Songs (`Child` objects), with their file sizes.
+	/// Songs (`Child` objects), with their file sizes and tags.
 	pub async fn songs(&self, songs: &[Song]) -> Vec<Element> {
 		let mut elements = Vec::with_capacity(songs.len());
 		for song in songs {
@@ -483,7 +500,8 @@ impl Mapper {
 				.await
 				.ok()
 				.map(|m| m.len());
-			elements.push(self.song(song, size));
+			let extras = tags::extras(&song.real_path).await;
+			elements.push(self.song(song, size, Some(&extras)));
 		}
 		elements
 	}

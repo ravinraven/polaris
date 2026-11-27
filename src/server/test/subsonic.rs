@@ -19,6 +19,7 @@ mod media;
 mod playlists;
 mod queue;
 mod server;
+mod tags;
 
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";
@@ -180,6 +181,44 @@ async fn library_service(test_name: &str) -> (ServiceType, String) {
 	let mut service = ServiceType::new(test_name).await;
 	service.complete_initial_setup().await;
 	service.login_admin().await;
+	let response = service
+		.fetch(&protocol::put_settings(dto::NewSettings {
+			opensubsonic_enabled: Some(true),
+			..Default::default()
+		}))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	service.index().await;
+
+	service.login().await;
+	let created = service
+		.fetch_json::<_, dto::CreatedApiKey>(&protocol::create_api_key(dto::NewApiKey {
+			label: "test".to_owned(),
+		}))
+		.await
+		.into_body();
+	service.logout().await;
+	(service, created.key)
+}
+
+/// Like [`library_service`], with a second music folder holding files with rich tags and lyrics.
+async fn tagged_service(test_name: &str) -> (ServiceType, String) {
+	let mut service = ServiceType::new(test_name).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+	let response = service
+		.fetch(&protocol::put_mount_dirs(vec![
+			dto::MountDir {
+				name: "collection".to_owned(),
+				source: "test-data/small-collection".into(),
+			},
+			dto::MountDir {
+				name: "tags".to_owned(),
+				source: "test-data/subsonic-tags".into(),
+			},
+		]))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
 	let response = service
 		.fetch(&protocol::put_settings(dto::NewSettings {
 			opensubsonic_enabled: Some(true),

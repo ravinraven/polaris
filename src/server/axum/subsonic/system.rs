@@ -10,6 +10,7 @@ const EXTENSIONS: &[(&str, &[i32])] = &[
 	("formPost", &[1]),
 	("playbackReport", &[1]),
 	("indexBasedQueue", &[1]),
+	("songLyrics", &[1]),
 	("topSongsByArtistId", &[1]),
 ];
 

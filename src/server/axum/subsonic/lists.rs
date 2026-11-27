@@ -253,7 +253,7 @@ pub async fn get_songs_by_genre(ctx: &Ctx, params: &Params) -> Result<Element, S
 
 /// A Polaris search query that looks for `text` anywhere. Quotes inside the text would end the
 /// quoted string early, so they are dropped.
-fn text_query(text: &str) -> String {
+pub fn text_query(text: &str) -> String {
 	format!("\"{}\"", text.replace('"', " "))
 }
 

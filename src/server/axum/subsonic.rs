@@ -24,6 +24,7 @@ mod auth;
 mod browse;
 mod ctx;
 mod lists;
+mod lyrics;
 mod media;
 mod model;
 mod params;
@@ -31,6 +32,7 @@ mod playlists;
 mod queue;
 mod response;
 mod system;
+mod tags;
 
 use auth::Mechanism;
 use ctx::Ctx;
@@ -153,6 +155,9 @@ const SUPPORTED: &[&str] = &[
 	"savePlayQueue",
 	"getPlayQueueByIndex",
 	"savePlayQueueByIndex",
+	// Lyrics
+	"getLyricsBySongId",
+	"getLyrics",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -298,6 +303,9 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"savePlayQueue" => queue::save_play_queue(ctx, params).await,
 		"getPlayQueueByIndex" => queue::get_play_queue_by_index(ctx, params).await,
 		"savePlayQueueByIndex" => queue::save_play_queue_by_index(ctx, params).await,
+
+		"getLyricsBySongId" => lyrics::get_lyrics_by_song_id(ctx, params).await,
+		"getLyrics" => lyrics::get_lyrics(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"

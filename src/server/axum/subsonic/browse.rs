@@ -13,6 +13,7 @@ use super::ctx::{internal, Ctx};
 use super::model::{self, AlbumData, Mapper, Wanted};
 use super::params::Params;
 use super::response::{Element, SubsonicError};
+use super::tags;
 
 /// Articles that are ignored when sorting artists into the index.
 pub const IGNORED_ARTICLES: &str = "The El La Los Las Le Les";
@@ -429,7 +430,21 @@ pub async fn get_album(ctx: &Ctx, params: &Params) -> Result<Element, SubsonicEr
 	let mapper = Mapper::load(ctx, wanted).await?;
 
 	let songs = mapper.songs(&album.songs).await;
-	Ok(Element::new().object("album", mapper.album(&data, Some(songs))))
+	// The first song that knows the album's MusicBrainz ID gives it
+	let mut musicbrainz_id = None;
+	for song in &album.songs {
+		musicbrainz_id = tags::extras(&song.real_path)
+			.await
+			.musicbrainz_album_id
+			.clone();
+		if musicbrainz_id.is_some() {
+			break;
+		}
+	}
+	let element = mapper
+		.album(&data, Some(songs))
+		.attr_opt("musicBrainzId", musicbrainz_id);
+	Ok(Element::new().object("album", element))
 }
 
 pub async fn get_song(ctx: &Ctx, params: &Params) -> Result<Element, SubsonicError> {
