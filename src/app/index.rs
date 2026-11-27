@@ -17,7 +17,9 @@ mod search;
 mod storage;
 
 pub use browser::File;
-pub use collection::{Album, AlbumHeader, Artist, ArtistHeader, Genre, GenreHeader, Song};
+pub use collection::{
+	Album, AlbumHeader, AlbumSummary, Artist, ArtistHeader, Genre, GenreHeader, GenreSummary, Song,
+};
 use storage::{store_song, AlbumKey, ArtistKey, GenreKey, InternPath, SongKey};
 
 #[derive(Clone)]
@@ -164,6 +166,30 @@ impl Manager {
 			move || {
 				let index = index_manager.index.read().unwrap();
 				index.collection.get_albums(&index.dictionary)
+			}
+		})
+		.await
+		.unwrap()
+	}
+
+	pub async fn get_album_summaries(&self) -> Vec<AlbumSummary> {
+		spawn_blocking({
+			let index_manager = self.clone();
+			move || {
+				let index = index_manager.index.read().unwrap();
+				index.collection.get_album_summaries(&index.dictionary)
+			}
+		})
+		.await
+		.unwrap()
+	}
+
+	pub async fn get_genre_summaries(&self) -> Vec<GenreSummary> {
+		spawn_blocking({
+			let index_manager = self.clone();
+			move || {
+				let index = index_manager.index.read().unwrap();
+				index.collection.get_genre_summaries(&index.dictionary)
 			}
 		})
 		.await

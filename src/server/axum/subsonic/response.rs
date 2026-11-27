@@ -66,6 +66,9 @@ pub enum Child {
 	Object(&'static str, Element),
 	/// A list of objects. XML repeats the element, JSON uses an array. Empty lists are omitted.
 	List(&'static str, Vec<Element>),
+	/// A list the specification requires: JSON has the array even when it is empty. (XML has
+	/// nothing for an empty list either way.)
+	RequiredList(&'static str, Vec<Element>),
 	/// A list of plain values (`"versions": [1]` / `<versions>1</versions>`).
 	Scalars(&'static str, Vec<Scalar>),
 }
@@ -74,6 +77,8 @@ pub enum Child {
 pub struct Element {
 	attrs: Vec<(&'static str, Scalar)>,
 	children: Vec<Child>,
+	/// Text content: the element's text in XML, a `value` property in JSON.
+	text: Option<String>,
 }
 
 impl Element {
@@ -95,6 +100,11 @@ impl Element {
 		}
 	}
 
+	pub fn text(mut self, text: impl Into<String>) -> Self {
+		self.text = Some(text.into());
+		self
+	}
+
 	pub fn object(mut self, name: &'static str, element: Element) -> Self {
 		self.children.push(Child::Object(name, element));
 		self
@@ -102,6 +112,11 @@ impl Element {
 
 	pub fn list(mut self, name: &'static str, elements: Vec<Element>) -> Self {
 		self.children.push(Child::List(name, elements));
+		self
+	}
+
+	pub fn required_list(mut self, name: &'static str, elements: Vec<Element>) -> Self {
+		self.children.push(Child::RequiredList(name, elements));
 		self
 	}
 
@@ -124,6 +139,8 @@ pub enum Format {
 pub struct SubsonicError {
 	pub code: u32,
 	pub message: String,
+	/// Set when the request was refused for coming too often: how many seconds to wait.
+	pub retry_after: Option<u64>,
 }
 
 impl SubsonicError {
@@ -131,6 +148,17 @@ impl SubsonicError {
 		Self {
 			code,
 			message: message.into(),
+			retry_after: None,
+		}
+	}
+
+	pub fn rate_limited(retry_after: u64) -> Self {
+		Self {
+			code: 0,
+			message: format!(
+				"Too many failed sign-in attempts. Try again in {retry_after} seconds."
+			),
+			retry_after: Some(retry_after),
 		}
 	}
 
@@ -170,6 +198,15 @@ impl SubsonicError {
 			"Multiple conflicting authentication mechanisms provided",
 		)
 	}
+	pub fn not_authorized() -> Self {
+		Self::new(50, "User is not authorized for the given operation")
+	}
+	pub fn not_found() -> Self {
+		Self::new(70, "The requested data was not found")
+	}
+	pub fn invalid_parameter(name: &str) -> Self {
+		Self::new(0, format!("Invalid value for parameter: {name}"))
+	}
 	pub fn invalid_api_key() -> Self {
 		Self::new(44, "Invalid API key")
 	}
@@ -180,6 +217,7 @@ impl SubsonicError {
 pub struct Reply {
 	format: Format,
 	root: Element,
+	retry_after: Option<u64>,
 }
 
 fn envelope(status: &'static str, body: Element) -> Element {
@@ -199,6 +237,7 @@ impl Reply {
 		Self {
 			format,
 			root: envelope("ok", body),
+			retry_after: None,
 		}
 	}
 
@@ -212,6 +251,7 @@ impl Reply {
 		Self {
 			format,
 			root: envelope("failed", body),
+			retry_after: error.retry_after,
 		}
 	}
 
@@ -231,6 +271,13 @@ impl IntoResponse for Reply {
 	fn into_response(self) -> Response {
 		let (body, content_type) = self.render();
 		let mut response = body.into_response();
+		// Unlike other failures, being told to slow down is also a status of the response
+		if let Some(seconds) = self.retry_after {
+			*response.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
+			response
+				.headers_mut()
+				.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+		}
 		let headers = response.headers_mut();
 		headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
 		// Responses may carry user data, and requests carry credentials in their URL.
@@ -275,12 +322,19 @@ fn element_to_json(element: &Element) -> Value {
 	for (name, value) in &element.attrs {
 		map.insert((*name).to_owned(), scalar_to_json(value));
 	}
+	if let Some(text) = &element.text {
+		map.insert("value".to_owned(), Value::String(text.clone()));
+	}
 	for child in &element.children {
 		match child {
 			Child::Object(name, e) => {
 				map.insert((*name).to_owned(), element_to_json(e));
 			}
 			Child::List(name, elements) if !elements.is_empty() => {
+				let items = elements.iter().map(element_to_json).collect();
+				map.insert((*name).to_owned(), Value::Array(items));
+			}
+			Child::RequiredList(name, elements) => {
 				let items = elements.iter().map(element_to_json).collect();
 				map.insert((*name).to_owned(), Value::Array(items));
 			}
@@ -350,18 +404,21 @@ fn write_xml(out: &mut String, name: &str, element: &Element, namespace: bool) {
 
 	let has_children = element.children.iter().any(|c| match c {
 		Child::Object(..) => true,
-		Child::List(_, v) => !v.is_empty(),
+		Child::List(_, v) | Child::RequiredList(_, v) => !v.is_empty(),
 		Child::Scalars(_, v) => !v.is_empty(),
 	});
-	if !has_children {
+	if !has_children && element.text.is_none() {
 		out.push_str("/>");
 		return;
 	}
 	out.push('>');
+	if let Some(text) = &element.text {
+		escape_xml(text, false, out);
+	}
 	for child in &element.children {
 		match child {
 			Child::Object(child_name, e) => write_xml(out, child_name, e, false),
-			Child::List(child_name, elements) => {
+			Child::List(child_name, elements) | Child::RequiredList(child_name, elements) => {
 				for e in elements {
 					write_xml(out, child_name, e, false);
 				}
@@ -498,6 +555,60 @@ mod test {
 		let text = root.children().find(|n| n.has_tag_name("text")).unwrap();
 		// Content line breaks are normalized to \n by parsers, except escaped carriage returns.
 		assert_eq!(text.text(), Some(tricky));
+	}
+
+	#[test]
+	fn required_lists_are_arrays_in_json_even_when_empty() {
+		let body = Element::new()
+			.required_list("entry", vec![])
+			.list("optional", vec![])
+			.required_list("full", vec![Element::new().attr("id", "1")]);
+		let (json, _) = Reply::ok(Format::Json, Element::new().object("x", body.clone())).render();
+		let json: Value = serde_json::from_str(&json).unwrap();
+		assert_eq!(
+			json["subsonic-response"]["x"]["entry"],
+			serde_json::json!([])
+		);
+		assert!(json["subsonic-response"]["x"].get("optional").is_none());
+		assert_eq!(json["subsonic-response"]["x"]["full"][0]["id"], "1");
+
+		let (xml, _) = Reply::ok(Format::Xml, Element::new().object("x", body)).render();
+		let doc = roxmltree::Document::parse(&xml).unwrap();
+		let x = doc
+			.root_element()
+			.children()
+			.find(|n| n.has_tag_name("x"))
+			.unwrap();
+		assert_eq!(x.children().filter(|n| n.has_tag_name("full")).count(), 1);
+		assert!(!x.children().any(|n| n.has_tag_name("entry")));
+	}
+
+	#[test]
+	fn text_content_is_a_value_property_in_json_and_a_text_node_in_xml() {
+		let lyrics = Element::new()
+			.attr("artist", "Someone")
+			.text("line 1\nline <2> & more");
+		let (body, _) = Reply::ok(
+			Format::Json,
+			Element::new().object("lyrics", lyrics.clone()),
+		)
+		.render();
+		let json: Value = serde_json::from_str(&body).unwrap();
+		assert_eq!(
+			json["subsonic-response"]["lyrics"]["value"],
+			"line 1\nline <2> & more"
+		);
+		assert_eq!(json["subsonic-response"]["lyrics"]["artist"], "Someone");
+
+		let (body, _) = Reply::ok(Format::Xml, Element::new().object("lyrics", lyrics)).render();
+		let doc = roxmltree::Document::parse(&body).unwrap();
+		let node = doc
+			.root_element()
+			.children()
+			.find(|n| n.has_tag_name("lyrics"))
+			.unwrap();
+		assert_eq!(node.attribute("artist"), Some("Someone"));
+		assert_eq!(node.text(), Some("line 1\nline <2> & more"));
 	}
 
 	#[test]

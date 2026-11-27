@@ -69,6 +69,14 @@ impl TestService for AxumTestService {
 }
 
 impl AxumTestService {
+	/// The session token of whoever is logged in
+	pub fn authorization_token(&self) -> String {
+		self.authorization
+			.as_ref()
+			.map(|a| a.token.clone())
+			.expect("not logged in")
+	}
+
 	fn prepare_request<T>(&mut self, request: &Request<T>) -> TestRequest {
 		let url = request.uri().to_string();
 
@@ -92,12 +100,8 @@ impl AxumTestService {
 			headers.append(name, value.clone());
 		}
 
-		let is_success = axum_response.status_code().is_success();
-		let body = if is_success {
-			Some(axum_response.into_bytes())
-		} else {
-			None
-		};
+		// The body is kept whatever the status: some errors have a description of their own.
+		let body = Some(axum_response.into_bytes());
 
 		(response_builder, body)
 	}

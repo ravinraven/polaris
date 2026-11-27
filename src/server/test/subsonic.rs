@@ -12,6 +12,16 @@ use crate::server::dto;
 use crate::server::test::{protocol, ServiceType, TestService};
 use crate::test_name;
 
+mod annotation;
+mod hardening;
+mod library;
+mod lists;
+mod media;
+mod playlists;
+mod queue;
+mod server;
+mod tags;
+
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";
 
@@ -165,6 +175,108 @@ async fn enabled_service(test_name: &str) -> (ServiceType, String) {
 		.into_body();
 	service.logout().await;
 	(service, created.key)
+}
+
+/// Like [`enabled_service`], with the test collection indexed.
+async fn library_service(test_name: &str) -> (ServiceType, String) {
+	let mut service = ServiceType::new(test_name).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+	let response = service
+		.fetch(&protocol::put_settings(dto::NewSettings {
+			opensubsonic_enabled: Some(true),
+			..Default::default()
+		}))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	service.index().await;
+
+	service.login().await;
+	let created = service
+		.fetch_json::<_, dto::CreatedApiKey>(&protocol::create_api_key(dto::NewApiKey {
+			label: "test".to_owned(),
+		}))
+		.await
+		.into_body();
+	service.logout().await;
+	(service, created.key)
+}
+
+/// Like [`library_service`], with a second music folder holding files with rich tags and lyrics.
+async fn tagged_service(test_name: &str) -> (ServiceType, String) {
+	let mut service = ServiceType::new(test_name).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+	let response = service
+		.fetch(&protocol::put_mount_dirs(vec![
+			dto::MountDir {
+				name: "collection".to_owned(),
+				source: "test-data/small-collection".into(),
+			},
+			dto::MountDir {
+				name: "tags".to_owned(),
+				source: "test-data/subsonic-tags".into(),
+			},
+		]))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	let response = service
+		.fetch(&protocol::put_settings(dto::NewSettings {
+			opensubsonic_enabled: Some(true),
+			..Default::default()
+		}))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	service.index().await;
+
+	service.login().await;
+	let created = service
+		.fetch_json::<_, dto::CreatedApiKey>(&protocol::create_api_key(dto::NewApiKey {
+			label: "test".to_owned(),
+		}))
+		.await
+		.into_body();
+	service.logout().await;
+	(service, created.key)
+}
+
+/// The schema describing the response of an endpoint, in the vendored specification.
+fn response_schema(endpoint: &str) -> String {
+	let mut name = endpoint.to_owned();
+	name[..1].make_ascii_uppercase();
+	let specific = format!("endpoints/{endpoint}/{name}Response.json");
+	// A few endpoints share a response with another one and have no schema of their own.
+	if PathBuf::from(SPEC_DIR).join(&specific).exists() {
+		specific
+	} else {
+		"schemas/SubsonicResponse.json".to_owned()
+	}
+}
+
+/// Calls an endpoint as JSON with the test user's key, and checks the response against the
+/// endpoint's schema. Returns the `subsonic-response` object.
+async fn call(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> Value {
+	let uri = format!("/rest/{endpoint}?{}&{extra}", auth_query(key));
+	let reply = fetch(service, &uri).await;
+	assert_eq!(reply.status, StatusCode::OK, "{endpoint}");
+	let json = reply.json();
+	assert_matches_schema(&response_schema(endpoint), &json);
+	json["subsonic-response"].clone()
+}
+
+async fn call_ok(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> Value {
+	let response = call(service, key, endpoint, extra).await;
+	assert_eq!(response["status"], "ok", "{endpoint} {extra}: {response}");
+	response
+}
+
+async fn call_failing(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> u64 {
+	let response = call(service, key, endpoint, extra).await;
+	assert_eq!(
+		response["status"], "failed",
+		"{endpoint} {extra}: {response}"
+	);
+	response["error"]["code"].as_u64().unwrap()
 }
 
 struct Reply {
@@ -795,4 +907,78 @@ async fn the_regular_api_is_not_affected() {
 	service.logout().await;
 	let response = service.fetch(&protocol::list_api_keys()).await;
 	assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn every_supported_endpoint_is_handled() {
+	use crate::server::axum::SUPPORTED_ENDPOINTS;
+	let (mut service, key) = library_service(&test_name!()).await;
+	assert!(SUPPORTED_ENDPOINTS.len() > 50);
+	for endpoint in SUPPORTED_ENDPOINTS {
+		let reply = fetch(
+			&mut service,
+			&format!("/rest/{endpoint}?{}", auth_query(&key)),
+		)
+		.await;
+		let body = reply.text();
+		assert!(
+			!body.contains("Endpoint not supported"),
+			"{endpoint} is listed but not handled: {body}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn endpoints_that_are_not_supported_say_so() {
+	let (mut service, key) = library_service(&test_name!()).await;
+	for endpoint in [
+		"getVideos",
+		"getVideoInfo",
+		"getCaptions",
+		"hls",
+		"getPodcasts",
+		"getNewestPodcasts",
+		"refreshPodcasts",
+		"createPodcastChannel",
+		"deletePodcastChannel",
+		"deletePodcastEpisode",
+		"downloadPodcastEpisode",
+		"getPodcastEpisode",
+		"jukeboxControl",
+		"getInternetRadioStations",
+		"createInternetRadioStation",
+		"updateInternetRadioStation",
+		"deleteInternetRadioStation",
+		"getChatMessages",
+		"addChatMessage",
+		"getShares",
+		"createShare",
+		"updateShare",
+		"deleteShare",
+		"createUser",
+		"updateUser",
+		"deleteUser",
+		"changePassword",
+		"getTranscodeDecision",
+		"getTranscodeStream",
+		"findSonicPath",
+		"getSonicSimilarTracks",
+		"search",
+	] {
+		let reply = fetch(
+			&mut service,
+			&format!("/rest/{endpoint}?{}", auth_query(&key)),
+		)
+		.await;
+		assert_eq!(reply.status, StatusCode::OK, "{endpoint}");
+		let json = reply.json();
+		assert_eq!(error_code(&json), 0, "{endpoint}");
+		assert!(
+			json["subsonic-response"]["error"]["message"]
+				.as_str()
+				.unwrap()
+				.contains("not supported"),
+			"{endpoint}"
+		);
+	}
 }

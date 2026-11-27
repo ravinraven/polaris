@@ -57,6 +57,25 @@ pub struct AlbumHeader {
 	pub date_added: i64,
 }
 
+/// An album with the statistics that are cheap to derive from the index but are not part of
+/// [`AlbumHeader`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AlbumSummary {
+	pub header: AlbumHeader,
+	pub num_songs: u32,
+	/// Total duration in seconds.
+	pub duration: i64,
+	/// Distinct genres of the songs, sorted.
+	pub genres: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct GenreSummary {
+	pub name: String,
+	pub num_songs: u32,
+	pub num_albums: u32,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Album {
 	pub header: AlbumHeader,
@@ -102,6 +121,49 @@ impl Collection {
 		let collator = dictionary::make_collator();
 		albums.sort_by(|a, b| collator.compare(&a.name, &b.name));
 		albums
+	}
+
+	pub fn get_album_summaries(&self, dictionary: &Dictionary) -> Vec<AlbumSummary> {
+		let mut albums = self
+			.albums
+			.values()
+			.map(|album| {
+				let mut duration = 0;
+				let mut genres = std::collections::BTreeSet::new();
+				for key in &album.songs {
+					if let Some(song) = self.songs.get(key) {
+						duration += song.duration.unwrap_or_default();
+						for genre in &song.genres {
+							genres.insert(dictionary.resolve(genre).to_string());
+						}
+					}
+				}
+				AlbumSummary {
+					header: make_album_header(album, dictionary),
+					num_songs: album.songs.len() as u32,
+					duration,
+					genres: genres.into_iter().collect(),
+				}
+			})
+			.collect::<Vec<_>>();
+		let collator = dictionary::make_collator();
+		albums.sort_by(|a, b| collator.compare(&a.header.name, &b.header.name));
+		albums
+	}
+
+	pub fn get_genre_summaries(&self, dictionary: &Dictionary) -> Vec<GenreSummary> {
+		let mut genres = self
+			.genres
+			.values()
+			.map(|genre| GenreSummary {
+				name: dictionary.resolve(&genre.name).to_string(),
+				num_songs: genre.songs.len() as u32,
+				num_albums: genre.albums.len() as u32,
+			})
+			.collect::<Vec<_>>();
+		let collator = dictionary::make_collator();
+		genres.sort_by(|a, b| collator.compare(&a.name, &b.name));
+		genres
 	}
 
 	pub fn get_artists(&self, dictionary: &Dictionary) -> Vec<ArtistHeader> {

@@ -103,6 +103,25 @@ pub mod v1 {
 		}
 	}
 
+	/// What Subsonic clients expect of a playlist but Polaris playlists do not record.
+	#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+	#[native_model(id = 7, version = 1)]
+	#[native_db(primary_key(custom_id -> (&str, &str)))]
+	pub struct PlaylistMetaModel {
+		#[secondary_key]
+		pub owner: String,
+		pub name: String,
+		pub comment: Option<String>,
+		pub created_at: i64,
+		pub changed_at: i64,
+	}
+
+	impl PlaylistMetaModel {
+		fn custom_id(&self) -> (&str, &str) {
+			(&self.owner, &self.name)
+		}
+	}
+
 	/// The saved play queue of a user (one per user).
 	#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 	#[native_model(id = 6, version = 1)]
@@ -127,8 +146,11 @@ type ItemStateModelKey = v1::ItemStateModelKey;
 type BookmarkModel = v1::BookmarkModel;
 type BookmarkModelKey = v1::BookmarkModelKey;
 type PlayQueueModel = v1::PlayQueueModel;
+type PlaylistMetaModel = v1::PlaylistMetaModel;
 
-pub use v1::{BookmarkModel as Bookmark, PlayQueueModel as PlayQueue};
+pub use v1::{
+	BookmarkModel as Bookmark, PlayQueueModel as PlayQueue, PlaylistMetaModel as PlaylistMeta,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiKeyInfo {
@@ -146,7 +168,7 @@ pub struct CreatedApiKey {
 	pub info: ApiKeyInfo,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectKind {
 	Song,
 	Album,
@@ -209,9 +231,28 @@ impl ItemState {
 	}
 }
 
+/// What a user is playing right now, as reported by their player. Kept in memory only: it
+/// is meaningless after a restart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NowPlaying {
+	pub user: String,
+	pub song_id: String,
+	pub client: String,
+	/// Seconds since the epoch.
+	pub started_at: i64,
+	pub updated_at: i64,
+	pub position_ms: Option<u64>,
+	pub state: Option<String>,
+	pub playback_rate: Option<f64>,
+}
+
+/// How long a player can stay silent before what it was playing is forgotten (seconds).
+const NOW_PLAYING_EXPIRY_SECS: i64 = 10 * 60;
+
 #[derive(Clone)]
 pub struct Manager {
 	db: ndb::Manager,
+	now_playing: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, NowPlaying>>>,
 }
 
 fn db_err(e: native_db::db_type::Error) -> Error {
@@ -265,7 +306,42 @@ fn lookup_key(kind: ObjectKind, natural_key: &str) -> String {
 
 impl Manager {
 	pub fn new(db: ndb::Manager) -> Self {
-		Self { db }
+		Self {
+			db,
+			now_playing: Default::default(),
+		}
+	}
+
+	// What is playing now (in memory only)
+
+	/// Records what a user is playing. The time they started is kept while they stay on the
+	/// same song.
+	pub fn set_now_playing(&self, mut entry: NowPlaying) {
+		let mut all = self.now_playing.lock().unwrap();
+		if let Some(previous) = all.get(&entry.user) {
+			if previous.song_id == entry.song_id {
+				entry.started_at = previous.started_at;
+			}
+		}
+		all.insert(entry.user.clone(), entry);
+	}
+
+	pub fn clear_now_playing(&self, user: &str) {
+		self.now_playing.lock().unwrap().remove(user);
+	}
+
+	pub fn now_playing_of(&self, user: &str) -> Option<NowPlaying> {
+		self.now_playing.lock().unwrap().get(user).cloned()
+	}
+
+	/// What everyone is playing, forgetting players that went quiet.
+	pub fn now_playing(&self) -> Vec<NowPlaying> {
+		let now = now();
+		let mut all = self.now_playing.lock().unwrap();
+		all.retain(|_, e| now - e.updated_at < NOW_PLAYING_EXPIRY_SECS);
+		let mut entries: Vec<_> = all.values().cloned().collect();
+		entries.sort_by(|a, b| a.user.cmp(&b.user));
+		entries
 	}
 
 	async fn read<T, F>(&self, f: F) -> Result<T, Error>
@@ -740,6 +816,137 @@ impl Manager {
 		.await
 	}
 
+	// Playlist metadata
+
+	/// The metadata of a playlist. Playlists made elsewhere have none until they are first
+	/// looked at, which is also when they are considered created.
+	pub async fn playlist_meta(&self, owner: &str, name: &str) -> Result<PlaylistMeta, Error> {
+		let owner = owner.to_owned();
+		let name = name.to_owned();
+		self.write(move |t| {
+			let existing = t
+				.get()
+				.primary::<PlaylistMetaModel>((owner.as_str(), name.as_str()))
+				.map_err(db_err)?;
+			if let Some(meta) = existing {
+				return Ok(meta);
+			}
+			let now = now();
+			let meta = PlaylistMetaModel {
+				owner,
+				name,
+				comment: None,
+				created_at: now,
+				changed_at: now,
+			};
+			t.insert(meta.clone()).map_err(db_err)?;
+			Ok(meta)
+		})
+		.await
+	}
+
+	/// Records that a playlist changed, and optionally replaces its comment (`Some(None)`
+	/// removes it).
+	pub async fn touch_playlist(
+		&self,
+		owner: &str,
+		name: &str,
+		comment: Option<Option<String>>,
+	) -> Result<(), Error> {
+		let owner = owner.to_owned();
+		let name = name.to_owned();
+		self.write(move |t| {
+			let now = now();
+			let existing = t
+				.get()
+				.primary::<PlaylistMetaModel>((owner.as_str(), name.as_str()))
+				.map_err(db_err)?;
+			match existing {
+				Some(old) => {
+					let mut new = old.clone();
+					new.changed_at = now;
+					if let Some(comment) = comment {
+						new.comment = comment;
+					}
+					t.update(old, new).map_err(db_err)?;
+				}
+				None => t
+					.insert(PlaylistMetaModel {
+						owner,
+						name,
+						comment: comment.flatten(),
+						created_at: now,
+						changed_at: now,
+					})
+					.map_err(db_err)?,
+			}
+			Ok(())
+		})
+		.await
+	}
+
+	/// Moves the metadata of a renamed playlist, and keeps its object ID.
+	pub async fn rename_playlist(&self, owner: &str, old: &str, new: &str) -> Result<(), Error> {
+		let owner_key = owner.to_owned();
+		let (old_name, new_name) = (old.to_owned(), new.to_owned());
+		self.write(move |t| {
+			let existing = t
+				.get()
+				.primary::<PlaylistMetaModel>((owner_key.as_str(), old_name.as_str()))
+				.map_err(db_err)?;
+			let now = now();
+			let moved = match &existing {
+				Some(meta) => PlaylistMetaModel {
+					name: new_name.clone(),
+					changed_at: now,
+					..meta.clone()
+				},
+				None => PlaylistMetaModel {
+					owner: owner_key.clone(),
+					name: new_name.clone(),
+					comment: None,
+					created_at: now,
+					changed_at: now,
+				},
+			};
+			if let Some(old_meta) = existing {
+				t.remove(old_meta).map_err(db_err)?;
+			}
+			// A leftover entry under the new name is replaced
+			if let Some(stale) = t
+				.get()
+				.primary::<PlaylistMetaModel>((owner_key.as_str(), new_name.as_str()))
+				.map_err(db_err)?
+			{
+				t.remove(stale).map_err(db_err)?;
+			}
+			t.insert(moved).map_err(db_err)?;
+			Ok(())
+		})
+		.await?;
+		let old_key = format!("{owner}\0{old}");
+		let new_key = format!("{owner}\0{new}");
+		self.rekey_id(ObjectKind::Playlist, &old_key, &new_key)
+			.await?;
+		Ok(())
+	}
+
+	pub async fn forget_playlist(&self, owner: &str, name: &str) -> Result<(), Error> {
+		let owner = owner.to_owned();
+		let name = name.to_owned();
+		self.write(move |t| {
+			if let Some(meta) = t
+				.get()
+				.primary::<PlaylistMetaModel>((owner.as_str(), name.as_str()))
+				.map_err(db_err)?
+			{
+				t.remove(meta).map_err(db_err)?;
+			}
+			Ok(())
+		})
+		.await
+	}
+
 	// Play queue
 
 	/// Replaces the saved play queue of a user.
@@ -1117,6 +1324,178 @@ mod test {
 		assert!(!state.delete_bookmark("alice", "so-other").await.unwrap());
 		assert!(state.delete_bookmark("alice", "so-1").await.unwrap());
 		assert!(state.list_bookmarks("alice").await.unwrap().is_empty());
+	}
+
+	#[tokio::test]
+	async fn playlist_metadata_is_created_on_first_use_and_then_stable() {
+		let (state, _) = manager(test_name!());
+		let first = state.playlist_meta("alice", "mix").await.unwrap();
+		assert_eq!(first.comment, None);
+		assert_eq!(first.created_at, first.changed_at);
+		assert_eq!(
+			state
+				.playlist_meta("alice", "mix")
+				.await
+				.unwrap()
+				.created_at,
+			first.created_at
+		);
+
+		state
+			.touch_playlist("alice", "mix", Some(Some("for the road".to_owned())))
+			.await
+			.unwrap();
+		let touched = state.playlist_meta("alice", "mix").await.unwrap();
+		assert_eq!(touched.comment.as_deref(), Some("for the road"));
+		assert_eq!(touched.created_at, first.created_at);
+		assert!(touched.changed_at >= first.changed_at);
+
+		// Touching without a comment leaves it, and Some(None) clears it
+		state.touch_playlist("alice", "mix", None).await.unwrap();
+		assert_eq!(
+			state
+				.playlist_meta("alice", "mix")
+				.await
+				.unwrap()
+				.comment
+				.as_deref(),
+			Some("for the road")
+		);
+		state
+			.touch_playlist("alice", "mix", Some(None))
+			.await
+			.unwrap();
+		assert_eq!(
+			state.playlist_meta("alice", "mix").await.unwrap().comment,
+			None
+		);
+
+		// Touching a playlist that was never looked at creates its metadata
+		state
+			.touch_playlist("alice", "new", Some(Some("hi".to_owned())))
+			.await
+			.unwrap();
+		assert_eq!(
+			state
+				.playlist_meta("alice", "new")
+				.await
+				.unwrap()
+				.comment
+				.as_deref(),
+			Some("hi")
+		);
+		// Users do not share metadata
+		assert_eq!(
+			state.playlist_meta("bob", "mix").await.unwrap().comment,
+			None
+		);
+	}
+
+	#[tokio::test]
+	async fn renaming_a_playlist_keeps_its_id_and_metadata() {
+		let (state, _) = manager(test_name!());
+		let id = state
+			.get_or_create_id(ObjectKind::Playlist, "alice\0old")
+			.await
+			.unwrap();
+		state
+			.touch_playlist("alice", "old", Some(Some("note".to_owned())))
+			.await
+			.unwrap();
+		let before = state.playlist_meta("alice", "old").await.unwrap();
+
+		state.rename_playlist("alice", "old", "new").await.unwrap();
+		let after = state.playlist_meta("alice", "new").await.unwrap();
+		assert_eq!(after.comment.as_deref(), Some("note"));
+		assert_eq!(after.created_at, before.created_at);
+		assert_eq!(
+			state.resolve_id(&id).await.unwrap(),
+			Some((ObjectKind::Playlist, "alice\0new".to_owned()))
+		);
+
+		// The old name starts afresh
+		let reused = state.playlist_meta("alice", "old").await.unwrap();
+		assert_eq!(reused.comment, None);
+
+		state.forget_playlist("alice", "new").await.unwrap();
+		assert_eq!(
+			state.playlist_meta("alice", "new").await.unwrap().comment,
+			None
+		);
+	}
+
+	#[tokio::test]
+	async fn now_playing_is_per_user_and_forgotten_when_cleared() {
+		let (state, _) = manager(test_name!());
+		let entry = |user: &str, song: &str| NowPlaying {
+			user: user.to_owned(),
+			song_id: song.to_owned(),
+			client: "player".to_owned(),
+			started_at: now(),
+			updated_at: now(),
+			position_ms: None,
+			state: None,
+			playback_rate: None,
+		};
+		assert!(state.now_playing().is_empty());
+		state.set_now_playing(entry("bob", "so_1"));
+		state.set_now_playing(entry("alice", "so_2"));
+		state.set_now_playing(entry("alice", "so_3"));
+		let all = state.now_playing();
+		assert_eq!(all.len(), 2, "one entry per user");
+		assert_eq!(all[0].user, "alice");
+		assert_eq!(all[0].song_id, "so_3");
+		assert_eq!(state.now_playing_of("bob").unwrap().song_id, "so_1");
+
+		state.clear_now_playing("alice");
+		assert!(state.now_playing_of("alice").is_none());
+		assert_eq!(state.now_playing().len(), 1);
+		state.clear_now_playing("nobody");
+
+		// Clones share what is playing
+		let clone = state.clone();
+		clone.clear_now_playing("bob");
+		assert!(state.now_playing().is_empty());
+	}
+
+	#[tokio::test]
+	async fn staying_on_a_song_keeps_its_start_time_and_silent_players_expire() {
+		let (state, _) = manager(test_name!());
+		let mut entry = NowPlaying {
+			user: "alice".to_owned(),
+			song_id: "so_1".to_owned(),
+			client: "player".to_owned(),
+			started_at: 1000,
+			updated_at: now(),
+			position_ms: Some(5),
+			state: None,
+			playback_rate: None,
+		};
+		state.set_now_playing(entry.clone());
+		entry.started_at = 2000;
+		entry.position_ms = Some(9000);
+		state.set_now_playing(entry.clone());
+		let current = state.now_playing_of("alice").unwrap();
+		assert_eq!(
+			current.started_at, 1000,
+			"same song: the start time is kept"
+		);
+		assert_eq!(current.position_ms, Some(9000));
+
+		entry.song_id = "so_2".to_owned();
+		state.set_now_playing(entry.clone());
+		assert_eq!(
+			state.now_playing_of("alice").unwrap().started_at,
+			2000,
+			"new song"
+		);
+
+		entry.updated_at = now() - NOW_PLAYING_EXPIRY_SECS - 1;
+		state.set_now_playing(entry);
+		assert!(
+			state.now_playing().is_empty(),
+			"a player that went quiet is forgotten"
+		);
 	}
 
 	#[tokio::test]

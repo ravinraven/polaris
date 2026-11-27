@@ -15,6 +15,8 @@ mod auth;
 mod error;
 mod logger;
 mod subsonic;
+#[cfg(test)]
+pub(crate) use subsonic::SUPPORTED as SUPPORTED_ENDPOINTS;
 mod version;
 
 #[cfg(test)]

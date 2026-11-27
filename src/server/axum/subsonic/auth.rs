@@ -4,8 +4,11 @@
 //! password (`u` + `p`, plain or hex-encoded with an `enc:` prefix). Salted-token authentication
 //! (`t` + `s`) needs the plaintext password, which Polaris does not keep, so it is not supported.
 
-use crate::app::{config, state, Error};
+use crate::app::{auth as app_auth, config, state, Error};
+use headers::authorization::{Bearer, Credentials};
+use http::HeaderMap;
 
+use super::guard::Guard;
 use super::params::Params;
 use super::response::{SubsonicError, API_VERSION_PARTS};
 
@@ -13,6 +16,8 @@ use super::response::{SubsonicError, API_VERSION_PARTS};
 pub enum Mechanism {
 	ApiKey,
 	Password,
+	/// A Polaris session token, as the bundled web client uses.
+	Session,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,15 +63,53 @@ fn decode_password(raw: &str) -> Option<String> {
 	String::from_utf8(bytes?).ok()
 }
 
+const OTHER_CREDENTIALS: [&str; 5] = ["apiKey", "u", "p", "t", "s"];
+
+/// The Polaris session token of a request, from `auth_token` or an `Authorization: Bearer`
+/// header, if there is one. A header never competes with credentials in the parameters.
+pub fn session_token(params: &Params, headers: &HeaderMap) -> Option<String> {
+	params.get("auth_token").map(str::to_owned).or_else(|| {
+		if OTHER_CREDENTIALS.iter().any(|n| params.contains(n)) {
+			return None;
+		}
+		headers
+			.get(http::header::AUTHORIZATION)
+			.and_then(Bearer::decode)
+			.map(|b| b.token().to_owned())
+	})
+}
+
+/// `enabled` says whether the OpenSubsonic API is switched on for third-party apps. Session
+/// tokens are the web client's own, so they work either way.
 pub async fn authenticate(
 	params: &Params,
+	headers: &HeaderMap,
+	enabled: bool,
 	config_manager: &config::Manager,
 	state_manager: &state::Manager,
+	guard: &Guard,
 ) -> Result<Authenticated, SubsonicError> {
 	// A repeated credential parameter is ambiguous, so it is never guessed at.
-	let credentials = ["apiKey", "u", "p", "t", "s"];
+	let credentials = ["apiKey", "u", "p", "t", "s", "auth_token"];
 	if credentials.iter().any(|name| params.count(name) > 1) {
 		return Err(SubsonicError::conflicting_mechanisms());
+	}
+
+	if let Some(token) = session_token(params, headers) {
+		if OTHER_CREDENTIALS.iter().any(|n| params.contains(n)) {
+			return Err(SubsonicError::conflicting_mechanisms());
+		}
+		let authorization = config_manager
+			.authenticate(&app_auth::Token(token), app_auth::Scope::PolarisAuth)
+			.await
+			.map_err(|_| SubsonicError::wrong_credentials())?;
+		return Ok(Authenticated {
+			username: authorization.username,
+			mechanism: Mechanism::Session,
+		});
+	}
+	if !enabled {
+		return Err(SubsonicError::wrong_credentials());
 	}
 
 	let has = |name: &str| params.contains(name);
@@ -103,15 +146,35 @@ pub async fn authenticate(
 
 	match (params.get("u"), params.get("p")) {
 		(Some(username), Some(password)) => {
+			guard.check(username).map_err(SubsonicError::rate_limited)?;
 			let Some(password) = decode_password(password) else {
+				guard.failed(username);
 				return Err(SubsonicError::wrong_credentials());
 			};
+
+			// A password that was just checked is not checked again
+			let stored = config_manager.get_user(username).await.ok();
+			let key = stored
+				.as_ref()
+				.map(|u| Guard::verification_key(username, &password, &u.hashed_password));
+			let signed_in = Authenticated {
+				username: username.to_owned(),
+				mechanism: Mechanism::Password,
+			};
+			if key.as_ref().is_some_and(|k| guard.is_verified(k)) {
+				return Ok(signed_in);
+			}
+
 			match config_manager.login(username, &password).await {
-				Ok(_) => Ok(Authenticated {
-					username: username.to_owned(),
-					mechanism: Mechanism::Password,
-				}),
+				Ok(_) => {
+					guard.succeeded(username);
+					if let Some(key) = key {
+						guard.remember_verified(key);
+					}
+					Ok(signed_in)
+				}
 				Err(Error::IncorrectUsername) | Err(Error::IncorrectPassword) => {
+					guard.failed(username);
 					Err(SubsonicError::wrong_credentials())
 				}
 				Err(_) => Err(SubsonicError::generic("Internal error")),
