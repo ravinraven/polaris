@@ -908,3 +908,77 @@ async fn the_regular_api_is_not_affected() {
 	let response = service.fetch(&protocol::list_api_keys()).await;
 	assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn every_supported_endpoint_is_handled() {
+	use crate::server::axum::SUPPORTED_ENDPOINTS;
+	let (mut service, key) = library_service(&test_name!()).await;
+	assert!(SUPPORTED_ENDPOINTS.len() > 50);
+	for endpoint in SUPPORTED_ENDPOINTS {
+		let reply = fetch(
+			&mut service,
+			&format!("/rest/{endpoint}?{}", auth_query(&key)),
+		)
+		.await;
+		let body = reply.text();
+		assert!(
+			!body.contains("Endpoint not supported"),
+			"{endpoint} is listed but not handled: {body}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn endpoints_that_are_not_supported_say_so() {
+	let (mut service, key) = library_service(&test_name!()).await;
+	for endpoint in [
+		"getVideos",
+		"getVideoInfo",
+		"getCaptions",
+		"hls",
+		"getPodcasts",
+		"getNewestPodcasts",
+		"refreshPodcasts",
+		"createPodcastChannel",
+		"deletePodcastChannel",
+		"deletePodcastEpisode",
+		"downloadPodcastEpisode",
+		"getPodcastEpisode",
+		"jukeboxControl",
+		"getInternetRadioStations",
+		"createInternetRadioStation",
+		"updateInternetRadioStation",
+		"deleteInternetRadioStation",
+		"getChatMessages",
+		"addChatMessage",
+		"getShares",
+		"createShare",
+		"updateShare",
+		"deleteShare",
+		"createUser",
+		"updateUser",
+		"deleteUser",
+		"changePassword",
+		"getTranscodeDecision",
+		"getTranscodeStream",
+		"findSonicPath",
+		"getSonicSimilarTracks",
+		"search",
+	] {
+		let reply = fetch(
+			&mut service,
+			&format!("/rest/{endpoint}?{}", auth_query(&key)),
+		)
+		.await;
+		assert_eq!(reply.status, StatusCode::OK, "{endpoint}");
+		let json = reply.json();
+		assert_eq!(error_code(&json), 0, "{endpoint}");
+		assert!(
+			json["subsonic-response"]["error"]["message"]
+				.as_str()
+				.unwrap()
+				.contains("not supported"),
+			"{endpoint}"
+		);
+	}
+}

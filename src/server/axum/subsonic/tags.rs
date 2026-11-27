@@ -158,8 +158,10 @@ fn read_file_tags(path: &Path) -> Option<FileTags> {
 	Some(tags)
 }
 
-static CACHE: LazyLock<Mutex<HashMap<PathBuf, (SystemTime, Arc<Extras>)>>> =
-	LazyLock::new(Default::default);
+/// Tags by file, with the modification time they were read at.
+type TagCache = HashMap<PathBuf, (SystemTime, Arc<Extras>)>;
+
+static CACHE: LazyLock<Mutex<TagCache>> = LazyLock::new(Default::default);
 
 /// The extra tags of a file. Files that cannot be read have none.
 pub async fn extras(path: &Path) -> Arc<Extras> {

@@ -95,7 +95,7 @@ fn is_form_content_type(request: &Request) -> bool {
 }
 
 /// Every endpoint Polaris implements.
-const SUPPORTED: &[&str] = &[
+pub(crate) const SUPPORTED: &[&str] = &[
 	// System
 	"ping",
 	"getLicense",
@@ -319,5 +319,37 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"
 		))),
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	/// The endpoints of the vendored specification (one file each).
+	fn specified_endpoints() -> std::collections::HashSet<String> {
+		std::fs::read_dir("docs/opensubsonic/openapi/endpoints")
+			.unwrap()
+			.filter_map(|e| e.ok())
+			.filter_map(|e| {
+				let path = e.path();
+				(path.extension()? == "json")
+					.then(|| path.file_stem()?.to_str().map(str::to_owned))?
+			})
+			.collect()
+	}
+
+	#[test]
+	fn every_supported_endpoint_is_in_the_specification_and_listed_once() {
+		let specified = specified_endpoints();
+		assert!(specified.len() > 80, "the specification could not be read");
+		let mut seen = std::collections::HashSet::new();
+		for endpoint in SUPPORTED {
+			assert!(
+				specified.contains(*endpoint),
+				"{endpoint} is not in the specification"
+			);
+			assert!(seen.insert(*endpoint), "{endpoint} is listed twice");
+		}
 	}
 }

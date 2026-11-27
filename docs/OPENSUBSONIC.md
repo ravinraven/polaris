@@ -1,20 +1,24 @@
 # OpenSubsonic API
 
 Polaris can speak the [OpenSubsonic](https://opensubsonic.github.io/docs/) API, so that apps
-written for Subsonic servers can browse and play your collection. This is work in progress: the
-framework and the system endpoints are done, the endpoints that serve your music are not yet.
+written for Subsonic servers can browse, search and play your collection. It implements version
+1.16.1 of the API, with the extensions listed below.
 
 ## Enabling it
 
-The API is **off by default**. An administrator turns it on with the `opensubsonic_enabled`
-setting, either in the configuration file:
+The API is **off by default**. An administrator turns it on:
 
-```toml
-opensubsonic_enabled = true
-```
+- in the web interface, under *Settings, API Keys*, with the OpenSubsonic switch (administrators
+  only), or
+- with the `opensubsonic_enabled` setting, in the configuration file:
 
-or with `PUT /api/settings` and `{ "opensubsonic_enabled": true }`. While it is off, every URL
-under `/rest` answers `404`.
+  ```toml
+  opensubsonic_enabled = true
+  ```
+
+  or with `PUT /api/settings` and `{ "opensubsonic_enabled": true }`.
+
+While it is off, every URL under `/rest` answers `404`.
 
 ## Signing in
 
@@ -33,6 +37,12 @@ connect. Such requests get error `41`.
 Passwords and keys travel in the URL of every request, so use HTTPS when the server is reachable
 from outside your network. Polaris itself logs only the path of requests, never the query string.
 
+**Limits on guessing.** After ten wrong passwords for a user name within ten minutes, password
+sign-in for that name is refused (HTTP `429` with a `Retry-After` header) until the ten minutes
+are over, even for the right password. API keys cannot be guessed, are not limited, and keep
+working during such a lockout. A correct password forgets earlier failures. Counts are kept in
+memory, per server.
+
 ## What a request looks like
 
 `/rest/<endpoint>` or `/rest/<endpoint>.view`, with `GET`, or `POST` with an
@@ -47,27 +57,69 @@ from outside your network. Polaris itself logs only the path of requests, never 
 
 Failures are reported inside a normal `200` response with `status="failed"` and an `error` code,
 as Subsonic does. Other HTTP statuses are used only for: `404` (API disabled), `415` (a `POST`
-that is not form-encoded) and `413` (a `POST` body over 64 KiB).
+that is not form-encoded), `413` (a `POST` body over 64 KiB) and `429` (too many failed
+sign-ins). Streaming answers `206` and `416` to range requests.
 
-Responses are sent with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Any web
-page may call the API (`Access-Control-Allow-Origin: *`): requests carry their own credentials and
-never rely on cookies, so this does not let a page act as a signed-in user.
+Responses are sent with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` (cover art
+may be cached for an hour). Any web page may call the API (`Access-Control-Allow-Origin: *`):
+requests carry their own credentials and never rely on cookies, so this does not let a page act
+as a signed-in user.
 
 ## Supported
 
-| Endpoint | Notes |
+| Area | Endpoints |
 | --- | --- |
-| `ping` | |
-| `getLicense` | Always valid: there is nothing to license. |
-| `getOpenSubsonicExtensions` | The only endpoint that needs no credentials. |
-| `tokenInfo` | Only with `apiKey` authentication. |
+| System | `ping`, `getLicense`, `getOpenSubsonicExtensions` (needs no credentials), `tokenInfo` (API key only) |
+| Browsing | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong` |
+| Information | `getArtistInfo`, `getArtistInfo2`, `getAlbumInfo`, `getAlbumInfo2`, `getSimilarSongs`, `getSimilarSongs2` (answered with empty descriptions: Polaris has no information from outside the library) |
+| Lists | `getAlbumList`, `getAlbumList2` (all ten types), `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `getTopSongs` |
+| Search | `search2`, `search3` |
+| Media | `stream`, `download`, `getCoverArt`, `getAvatar` (always "not found": there are no avatars) |
+| Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
+| What users do | `star`, `unstar`, `setRating`, `scrobble`, `getNowPlaying`, `reportPlayback` |
+| Bookmarks and queue | `getBookmarks`, `createBookmark`, `deleteBookmark`, `getPlayQueue`, `savePlayQueue`, `getPlayQueueByIndex`, `savePlayQueueByIndex` |
+| Lyrics | `getLyricsBySongId`, `getLyrics` |
+| Server | `getUser`, `getUsers`, `getScanStatus`, `startScan` |
 
-Extensions advertised: `apiKeyAuthentication` (1), `formPost` (1).
+Extensions advertised: `apiKeyAuthentication` (1), `formPost` (1), `playbackReport` (1),
+`indexBasedQueue` (1), `topSongsByArtistId` (1), `songLyrics` (1).
 
-Every other endpoint currently answers with error `0` ("Endpoint not supported"). Browsing,
-searching, streaming, cover art and playlists come next, followed by stars, ratings, play counts
-and bookmarks. Video, podcasts, internet radio, chat, jukebox, sharing and transcoding are not
-planned.
+**Not supported** (they answer with error `0`, "Endpoint not supported"): video, podcasts,
+internet radio, chat, jukebox, sharing, transcoding (`getTranscodeDecision` and
+`getTranscodeStream`, and the `transcoding` and `transcodeOffset` extensions), sonic similarity,
+the original `search` endpoint, and creating, changing or deleting users and changing passwords
+(use the Polaris web interface).
+
+## How things map onto Polaris
+
+- **IDs** are opaque, case-sensitive strings (`so_...` songs, `al_...` albums, `ar_...` artists,
+  `pl_...` playlists, `di_...` folders), generated once and stored, so they survive rescans.
+  Music folders have numeric IDs, as the specification wants, derived from the folder's name.
+- **Albums** are the albums of Polaris's index: a name together with its artists. **Artists** are
+  identified by name.
+- **Folders.** `getIndexes` and `getMusicDirectory` follow the file tree of each music folder.
+  `getMusicDirectory` also opens albums and artists, which the non-ID3 endpoints hand out as
+  directories. `musicFolderId` is checked and honored by `getIndexes`; the tag-based endpoints
+  accept it but do not filter by folder.
+- **Streaming** sends the original file, with range support. Polaris does not transcode, so the
+  format, bit rate and time offset an app asks for are ignored.
+- **Playlists** are the Polaris playlists of the signed-in user. They are always private
+  (`public` is false), a name can be used once per user, and renaming keeps the playlist's ID.
+  Polaris playlists do not record when they were made or changed: those times start when a
+  playlist is first seen through this API. Administrators can read other users' playlists, but
+  only owners can change them.
+- **Stars, ratings and plays** belong to a user. `scrobble` counts a play of a song and of its
+  album; a "now playing" notification is only kept in memory. `getNowPlaying` shows everyone to
+  administrators and only yourself to other users. Top songs come from the user's own play
+  counts, and leave out songs never played.
+- **Lyrics** come from an `.lrc` file next to the song (synced) and from the song's tags (plain,
+  or synced if the text is in LRC form). The language is reported as `xxx`.
+- **Tags read from files**: songs report their BPM, MusicBrainz ID and ReplayGain, and albums the
+  MusicBrainz ID of their songs. They are read when asked for and remembered in memory, so the
+  index is not affected.
+- **Search** text is always treated as text: it cannot be used to reach Polaris's own query
+  syntax. An empty query, or `*`, lists everything, as apps expect when they sync a library.
+- Page sizes are capped at 500.
 
 ## Decisions worth knowing about
 
@@ -79,17 +131,18 @@ These are places where the specification is silent or where Polaris deliberately
   Subsonic schema.
 - **Errors are HTTP 200.** The specification does not state a status code for failed responses;
   this follows Subsonic.
-- **Passwords are supported, hashes unchanged.** Checking a password costs one PBKDF2 verification
-  per request, the same as logging in to the regular API.
+- **A reported play** (`reportPlayback`) is counted once, when the player says a song is
+  *starting*, unless `ignoreScrobble` is set or the user was already playing that song.
 - **Several credentials, or the same one twice, are an error (`43`)** rather than a guess.
-- **Object IDs** are opaque strings (`so_...`, `al_...`, `ar_...`, `pl_...`, `di_...`), generated
-  once and stored, so they survive rescans. They are case sensitive.
+- **Everything about a request is checked before anything changes**: starring, rating,
+  scrobbling and playlist or queue changes with a bad ID change nothing.
 
 ## Reference
 
 `docs/opensubsonic/` contains an unmodified copy of the OpenSubsonic OpenAPI files (Apache-2.0),
 pinned to a commit; see its [README](opensubsonic/README.md). The tests validate Polaris's JSON
-responses against those schemas.
+responses against those schemas, and check that every endpoint Polaris lists exists in the
+specification.
 
 The specification describes JSON only. XML responses follow the original Subsonic
 `subsonic-rest-api.xsd`, which is not vendored, so XML is covered by hand-written assertions.
@@ -99,8 +152,18 @@ The specification describes JSON only. XML responses follow the original Subsoni
 ```sh
 KEY=...   # an API key from Settings, API Keys
 curl "http://localhost:5050/rest/getOpenSubsonicExtensions?f=json"
-curl "http://localhost:5050/rest/ping?apiKey=$KEY&v=1.16.1&c=curl&f=json"
+curl "http://localhost:5050/rest/getAlbumList2?apiKey=$KEY&v=1.16.1&c=curl&f=json&type=newest"
+curl -o song.mp3 "http://localhost:5050/rest/stream?apiKey=$KEY&v=1.16.1&c=curl&id=<a song ID>"
 ```
 
-Compatibility with specific apps has not been verified yet. Web-based clients are the first
-target; reports of what works and what does not are welcome.
+## What has and has not been verified
+
+Every endpoint has automated tests that run against a real server, in both JSON and XML where
+the shapes differ, and the JSON is validated against the specification's own schemas. A real
+browser page on another origin has been used to call the API.
+
+Not verified: **compatibility with specific apps** (none has been tried yet; web-based clients are
+the first target, and reports of what works and what does not are welcome), and **performance on
+large libraries**. Album lists and search work on the in-memory index and read tags from files
+the first time they are needed, which should be fine for personal libraries but has not been
+measured at scale.

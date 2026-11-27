@@ -255,7 +255,7 @@ pub async fn get_now_playing(ctx: &Ctx, _params: &Params) -> Result<Element, Sub
 		.zip(&playing)
 		.map(|(song, entry)| {
 			song.attr("username", entry.user.clone())
-				.attr("minutesAgo", ((now - entry.started_at).max(0) / 60) as i64)
+				.attr("minutesAgo", (now - entry.started_at).max(0) / 60)
 				.attr("playerId", player_id(&entry.client))
 				.attr_opt(
 					"playerName",

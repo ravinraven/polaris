@@ -413,5 +413,5 @@ async fn the_legacy_search_describes_albums_as_directories() {
 		.unwrap()
 		.iter()
 		.all(|a| a["isDir"] == true));
-	assert!(result["song"].as_array().unwrap().len() >= 1);
+	assert!(!result["song"].as_array().unwrap().is_empty());
 }

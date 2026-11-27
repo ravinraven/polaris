@@ -699,7 +699,7 @@ async fn playback_reports_are_validated() {
 		(report(id, "playing", 0, "&ignoreScrobble=maybe"), 0),
 		(report("so_unknown", "playing", 0, ""), 70),
 		(report(&h.album, "playing", 0, ""), 70),
-		(format!("mediaType=song&positionMs=0&state=playing"), 10),
+		("mediaType=song&positionMs=0&state=playing".to_owned(), 10),
 		(format!("mediaId={id}&positionMs=0&state=playing"), 10),
 		(format!("mediaId={id}&mediaType=song&state=playing"), 10),
 		(format!("mediaId={id}&mediaType=song&positionMs=0"), 10),

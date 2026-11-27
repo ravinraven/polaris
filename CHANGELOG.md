@@ -10,7 +10,7 @@
 - Fixed a race where a configuration change (eg. adding a user) could be overwritten by a reload of the configuration file triggered by the file watcher.
 - Added support for `webm` and `mka` files.
 - Added API key management endpoints (`GET` and `POST` `/api/api_keys`, `DELETE` `/api/api_keys/{id}`), in preparation for OpenSubsonic support. Keys are only stored as hashes and shown once, when created. API version is now 8.2.
-- Added the framework of the OpenSubsonic API at `/rest` (off by default, see [docs/OPENSUBSONIC.md](docs/OPENSUBSONIC.md)), with API key and password authentication, XML, JSON and JSONP responses, and the `ping`, `getLicense`, `getOpenSubsonicExtensions` and `tokenInfo` endpoints. The endpoints serving music are not implemented yet. Administrators enable it with the new `opensubsonic_enabled` setting.
+- Added the OpenSubsonic API at `/rest` (off by default, turned on by administrators in *Settings, API Keys*; see [docs/OPENSUBSONIC.md](docs/OPENSUBSONIC.md)), so that apps written for Subsonic servers can browse, search, stream and manage playlists, stars, ratings, bookmarks and the play queue. It supports API keys (create them in *Settings, API Keys*) and passwords, XML, JSON and JSONP responses, lyrics, and limits repeated failed password sign-ins. Not supported: video, podcasts, radio, chat, sharing, transcoding and user management.
 - Waveforms are now generated for `opus` files and for Opus audio in `webm` and `mka` files.
 
 ### General
