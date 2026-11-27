@@ -25,6 +25,7 @@ mod lists;
 mod media;
 mod model;
 mod params;
+mod playlists;
 mod response;
 mod system;
 
@@ -120,6 +121,12 @@ const SUPPORTED: &[&str] = &[
 	"download",
 	"getCoverArt",
 	"getAvatar",
+	// Playlists
+	"getPlaylists",
+	"getPlaylist",
+	"createPlaylist",
+	"updatePlaylist",
+	"deletePlaylist",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -236,6 +243,12 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"getSongsByGenre" => lists::get_songs_by_genre(ctx, params).await,
 		"search2" => lists::search2(ctx, params).await,
 		"search3" => lists::search3(ctx, params).await,
+
+		"getPlaylists" => playlists::get_playlists(ctx, params).await,
+		"getPlaylist" => playlists::get_playlist(ctx, params).await,
+		"createPlaylist" => playlists::create_playlist(ctx, params).await,
+		"updatePlaylist" => playlists::update_playlist(ctx, params).await,
+		"deletePlaylist" => playlists::delete_playlist(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"

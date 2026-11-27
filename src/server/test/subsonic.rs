@@ -15,6 +15,7 @@ use crate::test_name;
 mod library;
 mod lists;
 mod media;
+mod playlists;
 
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";

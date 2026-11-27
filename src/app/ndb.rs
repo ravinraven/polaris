@@ -16,6 +16,7 @@ static MODELS: LazyLock<Models> = LazyLock::new(|| {
 	models.define::<state::v1::ItemStateModel>().unwrap();
 	models.define::<state::v1::BookmarkModel>().unwrap();
 	models.define::<state::v1::PlayQueueModel>().unwrap();
+	models.define::<state::v1::PlaylistMetaModel>().unwrap();
 	models
 });
 
