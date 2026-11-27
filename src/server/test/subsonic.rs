@@ -17,6 +17,7 @@ mod library;
 mod lists;
 mod media;
 mod playlists;
+mod queue;
 mod server;
 
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";

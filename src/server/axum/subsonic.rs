@@ -28,6 +28,7 @@ mod media;
 mod model;
 mod params;
 mod playlists;
+mod queue;
 mod response;
 mod system;
 
@@ -144,6 +145,14 @@ const SUPPORTED: &[&str] = &[
 	"getStarred",
 	"getStarred2",
 	"getTopSongs",
+	// Bookmarks and the play queue
+	"getBookmarks",
+	"createBookmark",
+	"deleteBookmark",
+	"getPlayQueue",
+	"savePlayQueue",
+	"getPlayQueueByIndex",
+	"savePlayQueueByIndex",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -281,6 +290,14 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"getStarred" => annotation::get_starred(ctx, params).await,
 		"getStarred2" => annotation::get_starred2(ctx, params).await,
 		"getTopSongs" => annotation::get_top_songs(ctx, params).await,
+
+		"getBookmarks" => queue::get_bookmarks(ctx, params).await,
+		"createBookmark" => queue::create_bookmark(ctx, params).await,
+		"deleteBookmark" => queue::delete_bookmark(ctx, params).await,
+		"getPlayQueue" => queue::get_play_queue(ctx, params).await,
+		"savePlayQueue" => queue::save_play_queue(ctx, params).await,
+		"getPlayQueueByIndex" => queue::get_play_queue_by_index(ctx, params).await,
+		"savePlayQueueByIndex" => queue::save_play_queue_by_index(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"
