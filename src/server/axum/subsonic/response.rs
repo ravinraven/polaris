@@ -139,6 +139,8 @@ pub enum Format {
 pub struct SubsonicError {
 	pub code: u32,
 	pub message: String,
+	/// Set when the request was refused for coming too often: how many seconds to wait.
+	pub retry_after: Option<u64>,
 }
 
 impl SubsonicError {
@@ -146,6 +148,17 @@ impl SubsonicError {
 		Self {
 			code,
 			message: message.into(),
+			retry_after: None,
+		}
+	}
+
+	pub fn rate_limited(retry_after: u64) -> Self {
+		Self {
+			code: 0,
+			message: format!(
+				"Too many failed sign-in attempts. Try again in {retry_after} seconds."
+			),
+			retry_after: Some(retry_after),
 		}
 	}
 
@@ -204,6 +217,7 @@ impl SubsonicError {
 pub struct Reply {
 	format: Format,
 	root: Element,
+	retry_after: Option<u64>,
 }
 
 fn envelope(status: &'static str, body: Element) -> Element {
@@ -223,6 +237,7 @@ impl Reply {
 		Self {
 			format,
 			root: envelope("ok", body),
+			retry_after: None,
 		}
 	}
 
@@ -236,6 +251,7 @@ impl Reply {
 		Self {
 			format,
 			root: envelope("failed", body),
+			retry_after: error.retry_after,
 		}
 	}
 
@@ -255,6 +271,13 @@ impl IntoResponse for Reply {
 	fn into_response(self) -> Response {
 		let (body, content_type) = self.render();
 		let mut response = body.into_response();
+		// Unlike other failures, being told to slow down is also a status of the response
+		if let Some(seconds) = self.retry_after {
+			*response.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
+			response
+				.headers_mut()
+				.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+		}
 		let headers = response.headers_mut();
 		headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
 		// Responses may carry user data, and requests carry credentials in their URL.

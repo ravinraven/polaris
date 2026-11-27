@@ -92,12 +92,8 @@ impl AxumTestService {
 			headers.append(name, value.clone());
 		}
 
-		let is_success = axum_response.status_code().is_success();
-		let body = if is_success {
-			Some(axum_response.into_bytes())
-		} else {
-			None
-		};
+		// The body is kept whatever the status: some errors have a description of their own.
+		let body = Some(axum_response.into_bytes());
 
 		(response_builder, body)
 	}

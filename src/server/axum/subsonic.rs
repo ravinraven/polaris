@@ -4,7 +4,7 @@
 //! `/rest/<name>.view`, with GET or (form-encoded) POST. Unless the server setting
 //! `opensubsonic_enabled` is on, the whole API answers 404.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
 	body::to_bytes,
@@ -12,7 +12,7 @@ use axum::{
 	http::{header, HeaderMap, Method, StatusCode},
 	response::{IntoResponse, Response},
 	routing::get,
-	Router,
+	Extension, Router,
 };
 use tower_http::cors::{Any, CorsLayer};
 
@@ -23,6 +23,7 @@ mod annotation;
 mod auth;
 mod browse;
 mod ctx;
+mod guard;
 mod lists;
 mod lyrics;
 mod media;
@@ -34,8 +35,8 @@ mod response;
 mod system;
 mod tags;
 
-use auth::Mechanism;
 use ctx::Ctx;
+use guard::Guard;
 use params::Params;
 use response::{is_valid_jsonp_callback, Element, Format, Reply, SubsonicError};
 
@@ -53,6 +54,7 @@ pub fn router() -> Router<App> {
 
 	Router::new()
 		.route("/{method}", get(handle).post(handle))
+		.layer(Extension(Arc::new(Guard::default())))
 		.layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 		.layer(cors)
 }
@@ -160,7 +162,12 @@ const SUPPORTED: &[&str] = &[
 	"getLyrics",
 ];
 
-async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
+async fn handle(
+	State(app): State<App>,
+	Extension(guard): Extension<Arc<Guard>>,
+	Path(method): Path<String>,
+	request: Request,
+) -> Response {
 	if !app.config_manager.get_opensubsonic_enabled().await {
 		return StatusCode::NOT_FOUND.into_response();
 	}
@@ -187,11 +194,12 @@ async fn handle(State(app): State<App>, Path(method): Path<String>, request: Req
 	}
 
 	let method = method.strip_suffix(".view").unwrap_or(&method);
-	dispatch(&app, method, &params, &headers, format).await
+	dispatch(&app, &guard, method, &params, &headers, format).await
 }
 
 async fn dispatch(
 	app: &App,
+	guard: &Guard,
 	method: &str,
 	params: &Params,
 	headers: &HeaderMap,
@@ -220,10 +228,11 @@ async fn dispatch(
 		return Reply::error(format, error).into_response();
 	}
 
-	let user = match auth::authenticate(params, &app.config_manager, &app.state_manager).await {
-		Ok(user) => user,
-		Err(error) => return Reply::error(format, error).into_response(),
-	};
+	let user =
+		match auth::authenticate(params, &app.config_manager, &app.state_manager, guard).await {
+			Ok(user) => user,
+			Err(error) => return Reply::error(format, error).into_response(),
+		};
 	let ctx = Ctx::new(app, &user);
 
 	// Endpoints that answer with a file instead of a description

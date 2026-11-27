@@ -13,6 +13,7 @@ use crate::server::test::{protocol, ServiceType, TestService};
 use crate::test_name;
 
 mod annotation;
+mod hardening;
 mod library;
 mod lists;
 mod media;

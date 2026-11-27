@@ -6,6 +6,7 @@
 
 use crate::app::{config, state, Error};
 
+use super::guard::Guard;
 use super::params::Params;
 use super::response::{SubsonicError, API_VERSION_PARTS};
 
@@ -62,6 +63,7 @@ pub async fn authenticate(
 	params: &Params,
 	config_manager: &config::Manager,
 	state_manager: &state::Manager,
+	guard: &Guard,
 ) -> Result<Authenticated, SubsonicError> {
 	// A repeated credential parameter is ambiguous, so it is never guessed at.
 	let credentials = ["apiKey", "u", "p", "t", "s"];
@@ -103,15 +105,35 @@ pub async fn authenticate(
 
 	match (params.get("u"), params.get("p")) {
 		(Some(username), Some(password)) => {
+			guard.check(username).map_err(SubsonicError::rate_limited)?;
 			let Some(password) = decode_password(password) else {
+				guard.failed(username);
 				return Err(SubsonicError::wrong_credentials());
 			};
+
+			// A password that was just checked is not checked again
+			let stored = config_manager.get_user(username).await.ok();
+			let key = stored
+				.as_ref()
+				.map(|u| Guard::verification_key(username, &password, &u.hashed_password));
+			let signed_in = Authenticated {
+				username: username.to_owned(),
+				mechanism: Mechanism::Password,
+			};
+			if key.as_ref().is_some_and(|k| guard.is_verified(k)) {
+				return Ok(signed_in);
+			}
+
 			match config_manager.login(username, &password).await {
-				Ok(_) => Ok(Authenticated {
-					username: username.to_owned(),
-					mechanism: Mechanism::Password,
-				}),
+				Ok(_) => {
+					guard.succeeded(username);
+					if let Some(key) = key {
+						guard.remember_verified(key);
+					}
+					Ok(signed_in)
+				}
 				Err(Error::IncorrectUsername) | Err(Error::IncorrectPassword) => {
+					guard.failed(username);
 					Err(SubsonicError::wrong_credentials())
 				}
 				Err(_) => Err(SubsonicError::generic("Internal error")),

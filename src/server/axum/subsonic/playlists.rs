@@ -246,7 +246,7 @@ pub async fn update_playlist(ctx: &Ctx, params: &Params) -> Result<Element, Subs
 	// Not stored: Polaris playlists are always private
 	params.bool("public")?;
 
-	let mut songs = ctx
+	let songs = ctx
 		.playlists
 		.read_playlist(&name, &ctx.user)
 		.await
