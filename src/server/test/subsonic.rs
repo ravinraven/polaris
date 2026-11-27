@@ -13,6 +13,7 @@ use crate::server::test::{protocol, ServiceType, TestService};
 use crate::test_name;
 
 mod library;
+mod lists;
 
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";

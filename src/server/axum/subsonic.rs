@@ -21,6 +21,7 @@ use crate::app::App;
 mod auth;
 mod browse;
 mod ctx;
+mod lists;
 mod model;
 mod params;
 mod response;
@@ -106,6 +107,13 @@ const SUPPORTED: &[&str] = &[
 	"getAlbumInfo2",
 	"getSimilarSongs",
 	"getSimilarSongs2",
+	// Lists and search
+	"getAlbumList",
+	"getAlbumList2",
+	"getRandomSongs",
+	"getSongsByGenre",
+	"search2",
+	"search3",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -200,6 +208,13 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"getAlbumInfo" | "getAlbumInfo2" => browse::get_album_info(ctx, params).await,
 		"getSimilarSongs" => browse::get_similar_songs("similarSongs", ctx, params).await,
 		"getSimilarSongs2" => browse::get_similar_songs("similarSongs2", ctx, params).await,
+
+		"getAlbumList" => lists::get_album_list(ctx, params).await,
+		"getAlbumList2" => lists::get_album_list2(ctx, params).await,
+		"getRandomSongs" => lists::get_random_songs(ctx, params).await,
+		"getSongsByGenre" => lists::get_songs_by_genre(ctx, params).await,
+		"search2" => lists::search2(ctx, params).await,
+		"search3" => lists::search3(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"
