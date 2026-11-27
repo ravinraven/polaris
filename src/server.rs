@@ -23,7 +23,7 @@ impl TryFrom<i32> for APIMajorVersion {
 }
 
 pub const API_MAJOR_VERSION: i32 = 8;
-pub const API_MINOR_VERSION: i32 = 1;
+pub const API_MINOR_VERSION: i32 = 2;
 pub const API_ARRAY_SEPARATOR: &str = "\u{000C}";
 
 mod axum;

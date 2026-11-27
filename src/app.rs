@@ -16,6 +16,7 @@ pub mod ndb;
 pub mod peaks;
 pub mod playlist;
 pub mod scanner;
+pub mod state;
 pub mod thumbnail;
 
 #[cfg(test)]
@@ -65,6 +66,11 @@ pub enum Error {
 	OpusDecoder(opus_decoder::OpusError),
 	#[error("Opus streams with {0} channels are not supported")]
 	OpusChannelCount(usize),
+
+	#[error("Could not obtain random bytes from the operating system")]
+	EntropyUnavailable,
+	#[error("Ratings must be between 0 and 5")]
+	InvalidRating,
 
 	#[error(transparent)]
 	PeaksSerialization(bitcode::Error),
@@ -166,6 +172,7 @@ pub struct App {
 	pub config_manager: config::Manager,
 	pub peaks_manager: peaks::Manager,
 	pub playlist_manager: playlist::Manager,
+	pub state_manager: state::Manager,
 	pub thumbnail_manager: thumbnail::Manager,
 }
 
@@ -193,6 +200,7 @@ impl App {
 		let index_manager = index::Manager::new(&paths.data_dir_path).await?;
 		let scanner = scanner::Scanner::new(index_manager.clone(), config_manager.clone()).await?;
 		let peaks_manager = peaks::Manager::new(peaks_dir_path);
+		let state_manager = state::Manager::new(ndb_manager.clone());
 		let playlist_manager =
 			playlist::Manager::new(config_manager.clone(), index_manager.clone(), ndb_manager);
 		let thumbnail_manager = thumbnail::Manager::new(thumbnails_dir_path);
@@ -206,6 +214,7 @@ impl App {
 			config_manager,
 			peaks_manager,
 			playlist_manager,
+			state_manager,
 			thumbnail_manager,
 		};
 

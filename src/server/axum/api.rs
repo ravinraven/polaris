@@ -16,7 +16,7 @@ use tower_http::{compression::CompressionLayer, CompressionLevel};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-	app::{auth, config, ddns, index, peaks, playlist, scanner, thumbnail, App},
+	app::{auth, config, ddns, index, peaks, playlist, scanner, state, thumbnail, App},
 	server::{
 		dto, error::APIError, APIMajorVersion, API_ARRAY_SEPARATOR, API_MAJOR_VERSION,
 		API_MINOR_VERSION,
@@ -39,6 +39,8 @@ pub fn router() -> OpenApiRouter<App> {
 		.routes(routes!(post_user))
 		.routes(routes!(delete_user, put_user))
 		.routes(routes!(get_users))
+		.routes(routes!(get_api_keys, post_api_key))
+		.routes(routes!(delete_api_key))
 		// File browser
 		.routes(routes!(get_browse_root))
 		.routes(routes!(get_browse))
@@ -144,6 +146,7 @@ async fn get_settings(
 			.as_ref()
 			.map(http::Uri::to_string)
 			.unwrap_or_default(),
+		opensubsonic_enabled: config_manager.get_opensubsonic_enabled().await,
 	};
 	Ok(Json(settings))
 }
@@ -179,6 +182,10 @@ async fn put_settings(
 		};
 		config_manager.set_ddns_update_url(uri).await?;
 		ddns_manager.update_ddns().await?;
+	}
+
+	if let Some(enabled) = new_settings.opensubsonic_enabled {
+		config_manager.set_opensubsonic_enabled(enabled).await?;
 	}
 
 	Ok(())
@@ -306,6 +313,91 @@ async fn post_user(
 		.create_user(&new_user.name, &new_user.password, new_user.admin)
 		.await?;
 	Ok(())
+}
+
+const MAX_API_KEY_LABEL_LENGTH: usize = 100;
+const MAX_API_KEYS_PER_USER: usize = 100;
+
+#[utoipa::path(
+	get,
+	path = "/api_keys",
+	tag = "User Management",
+	description = "Lists the API keys of the current user.\n\nThe keys themselves are never returned, only their labels and usage information.",
+	security(
+		("auth_token" = []),
+		("auth_query_param" = []),
+	),
+	responses(
+		(status = 200, body = Vec<dto::ApiKey>),
+	)
+)]
+async fn get_api_keys(
+	auth: Auth,
+	State(state_manager): State<state::Manager>,
+) -> Result<Json<Vec<dto::ApiKey>>, APIError> {
+	let keys = state_manager.list_api_keys(auth.get_username()).await?;
+	Ok(Json(keys.into_iter().map(|k| k.into()).collect()))
+}
+
+#[utoipa::path(
+	post,
+	path = "/api_keys",
+	tag = "User Management",
+	description = "Creates an API key for the current user.\n\nAPI keys let third-party applications act as this user without knowing the password. They only work with the OpenSubsonic API, never with this API.\n\nThe key is returned **once**: the server only stores a hash of it, so it cannot be shown again.",
+	security(
+		("auth_token" = []),
+		("auth_query_param" = []),
+	),
+	request_body = dto::NewApiKey,
+	responses(
+		(status = 200, body = dto::CreatedApiKey),
+	)
+)]
+async fn post_api_key(
+	auth: Auth,
+	State(state_manager): State<state::Manager>,
+	Json(new_key): Json<dto::NewApiKey>,
+) -> Result<Json<dto::CreatedApiKey>, APIError> {
+	let label = new_key.label.trim();
+	if label.is_empty() || label.chars().count() > MAX_API_KEY_LABEL_LENGTH {
+		return Err(APIError::InvalidApiKeyLabel);
+	}
+
+	let existing = state_manager.list_api_keys(auth.get_username()).await?;
+	if existing.len() >= MAX_API_KEYS_PER_USER {
+		return Err(APIError::TooManyApiKeys);
+	}
+
+	let created = state_manager
+		.create_api_key(auth.get_username(), label)
+		.await?;
+	Ok(Json(created.into()))
+}
+
+#[utoipa::path(
+	delete,
+	path = "/api_keys/{id}",
+	tag = "User Management",
+	description = "Revokes one of the current user's API keys. The key stops working immediately.",
+	security(
+		("auth_token" = []),
+		("auth_query_param" = []),
+	),
+	params(("id", example = "5d41402abc4b2a76")),
+)]
+async fn delete_api_key(
+	auth: Auth,
+	State(state_manager): State<state::Manager>,
+	Path(id): Path<String>,
+) -> Result<(), APIError> {
+	if state_manager
+		.revoke_api_key(auth.get_username(), &id)
+		.await?
+	{
+		Ok(())
+	} else {
+		Err(APIError::ApiKeyNotFound)
+	}
 }
 
 #[utoipa::path(

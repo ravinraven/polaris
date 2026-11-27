@@ -29,6 +29,12 @@ pub enum APIError {
 	DirectoryNotFound(PathBuf),
 	#[error("Artist not found")]
 	ArtistNotFound,
+	#[error("API key not found")]
+	ApiKeyNotFound,
+	#[error("API key labels must be between 1 and 100 characters")]
+	InvalidApiKeyLabel,
+	#[error("Too many API keys, revoke some before creating more")]
+	TooManyApiKeys,
 	#[error("Album not found")]
 	AlbumNotFound,
 	#[error("Genre not found")]
@@ -125,6 +131,8 @@ impl From<app::Error> for APIError {
 			app::Error::MediaProbe(e) => APIError::AudioDecoding(e),
 			app::Error::OpusDecoder(_) => APIError::Internal,
 			app::Error::OpusChannelCount(_) => APIError::Internal,
+			app::Error::EntropyUnavailable => APIError::Internal,
+			app::Error::InvalidRating => APIError::Internal,
 
 			app::Error::PeaksSerialization(_) => APIError::Internal,
 			app::Error::PeaksDeserialization(_) => APIError::Internal,

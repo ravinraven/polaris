@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use axum::body::Bytes;
 use axum_test::{TestRequest, TestResponse, TestServer};
-use http::{response::Builder, Method, Request, Response};
+use http::{response::Builder, Request, Response};
 use serde::Serialize;
 
 use crate::app::App;
@@ -72,13 +72,7 @@ impl AxumTestService {
 	fn prepare_request<T>(&mut self, request: &Request<T>) -> TestRequest {
 		let url = request.uri().to_string();
 
-		let mut axum_request = match *request.method() {
-			Method::GET => self.server.get(&url),
-			Method::POST => self.server.post(&url),
-			Method::PUT => self.server.put(&url),
-			Method::DELETE => self.server.delete(&url),
-			_ => unimplemented!(),
-		};
+		let mut axum_request = self.server.method(request.method().clone(), &url);
 
 		for (name, value) in request.headers() {
 			axum_request = axum_request.add_header(name.clone(), value.clone());

@@ -27,6 +27,7 @@ use super::auth;
 pub struct Config {
 	pub album_art_pattern: Option<Regex>,
 	pub ddns_update_url: Option<http::Uri>,
+	pub opensubsonic_enabled: bool,
 	pub mount_dirs: Vec<MountDir>,
 	pub users: Vec<User>,
 }
@@ -51,6 +52,8 @@ impl TryFrom<storage::Config> for Config {
 			None => None,
 		};
 
+		config.opensubsonic_enabled = c.opensubsonic_enabled.unwrap_or(false);
+
 		Ok(config)
 	}
 }
@@ -61,6 +64,7 @@ impl From<Config> for storage::Config {
 			album_art_pattern: c.album_art_pattern.map(|p| p.as_str().to_owned()),
 			mount_dirs: c.mount_dirs.into_iter().map(|d| d.into()).collect(),
 			ddns_update_url: c.ddns_update_url.map(|u| u.to_string()),
+			opensubsonic_enabled: c.opensubsonic_enabled.then_some(true),
 			users: c.users.into_iter().map(|u| u.into()).collect(),
 		}
 	}
@@ -171,6 +175,9 @@ impl Manager {
 		Ok(())
 	}
 
+	// Only used by tests: reloads go through `reload_config`, which holds the config lock
+	// while it reads the file.
+	#[cfg(test)]
 	pub async fn apply_config(&self, new_config: storage::Config) -> Result<(), Error> {
 		let mut config = self.config.write().await;
 		*config = new_config.try_into()?;
@@ -221,6 +228,17 @@ impl Manager {
 	pub async fn set_ddns_update_url(&self, url: Option<http::Uri>) -> Result<(), Error> {
 		self.mutate(|c| {
 			c.ddns_update_url = url;
+		})
+		.await
+	}
+
+	pub async fn get_opensubsonic_enabled(&self) -> bool {
+		self.config.read().await.opensubsonic_enabled
+	}
+
+	pub async fn set_opensubsonic_enabled(&self, enabled: bool) -> Result<(), Error> {
+		self.mutate(|c| {
+			c.opensubsonic_enabled = enabled;
 		})
 		.await
 	}

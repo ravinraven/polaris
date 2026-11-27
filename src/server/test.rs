@@ -11,6 +11,7 @@ pub mod constants;
 pub mod protocol;
 
 mod admin;
+mod api_keys;
 mod auth;
 mod browser;
 mod collection;
@@ -19,6 +20,7 @@ mod media;
 mod playlist;
 mod search;
 mod settings;
+mod subsonic;
 mod user;
 mod web;
 

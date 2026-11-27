@@ -6,11 +6,16 @@ use std::{
 
 use native_db::{Database, Models};
 
-use crate::app::{playlist, Error};
+use crate::app::{playlist, state, Error};
 
 static MODELS: LazyLock<Models> = LazyLock::new(|| {
 	let mut models = Models::new();
 	models.define::<playlist::v1::PlaylistModel>().unwrap();
+	models.define::<state::v1::ApiKeyModel>().unwrap();
+	models.define::<state::v1::ObjectIdModel>().unwrap();
+	models.define::<state::v1::ItemStateModel>().unwrap();
+	models.define::<state::v1::BookmarkModel>().unwrap();
+	models.define::<state::v1::PlayQueueModel>().unwrap();
 	models
 });
 

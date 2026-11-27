@@ -94,6 +94,30 @@ pub fn list_users() -> Request<()> {
 		.unwrap()
 }
 
+pub fn list_api_keys() -> Request<()> {
+	Request::builder()
+		.method(Method::GET)
+		.uri("/api/api_keys")
+		.body(())
+		.unwrap()
+}
+
+pub fn create_api_key(new_key: dto::NewApiKey) -> Request<dto::NewApiKey> {
+	Request::builder()
+		.method(Method::POST)
+		.uri("/api/api_keys")
+		.body(new_key)
+		.unwrap()
+}
+
+pub fn delete_api_key(id: &str) -> Request<()> {
+	Request::builder()
+		.method(Method::DELETE)
+		.uri(format!("/api/api_keys/{}", url_encode(id)))
+		.body(())
+		.unwrap()
+}
+
 pub fn create_user(new_user: dto::NewUser) -> Request<dto::NewUser> {
 	Request::builder()
 		.method(Method::POST)
