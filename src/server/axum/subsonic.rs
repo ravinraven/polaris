@@ -18,6 +18,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::app::App;
 
+mod admin;
 mod auth;
 mod browse;
 mod ctx;
@@ -127,6 +128,11 @@ const SUPPORTED: &[&str] = &[
 	"createPlaylist",
 	"updatePlaylist",
 	"deletePlaylist",
+	// Users and scanning
+	"getUser",
+	"getUsers",
+	"getScanStatus",
+	"startScan",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -249,6 +255,11 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"createPlaylist" => playlists::create_playlist(ctx, params).await,
 		"updatePlaylist" => playlists::update_playlist(ctx, params).await,
 		"deletePlaylist" => playlists::delete_playlist(ctx, params).await,
+
+		"getUser" => admin::get_user(ctx, params).await,
+		"getUsers" => admin::get_users(ctx, params).await,
+		"getScanStatus" => admin::get_scan_status(ctx, params).await,
+		"startScan" => admin::start_scan(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"

@@ -16,6 +16,7 @@ mod library;
 mod lists;
 mod media;
 mod playlists;
+mod server;
 
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";
