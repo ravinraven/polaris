@@ -2372,6 +2372,7 @@ dependencies = [
  "bitcode",
  "branca",
  "bytes",
+ "chrono",
  "chumsky",
  "crc32fast",
  "daemonize",

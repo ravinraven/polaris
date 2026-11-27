@@ -9,23 +9,27 @@ use std::time::Duration;
 use axum::{
 	body::to_bytes,
 	extract::{DefaultBodyLimit, Path, Request, State},
-	http::{header, Method, StatusCode},
+	http::{header, HeaderMap, Method, StatusCode},
 	response::{IntoResponse, Response},
 	routing::get,
 	Router,
 };
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::app::{config, state, App};
+use crate::app::App;
 
 mod auth;
+mod browse;
+mod ctx;
+mod model;
 mod params;
 mod response;
 mod system;
 
 use auth::Mechanism;
+use ctx::Ctx;
 use params::Params;
-use response::{is_valid_jsonp_callback, Format, Reply, SubsonicError};
+use response::{is_valid_jsonp_callback, Element, Format, Reply, SubsonicError};
 
 /// Requests are small: this is only a limit on what a form POST may carry.
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -80,18 +84,38 @@ fn is_form_content_type(request: &Request) -> bool {
 		})
 }
 
-async fn handle(
-	State(config_manager): State<config::Manager>,
-	State(state_manager): State<state::Manager>,
-	Path(method): Path<String>,
-	request: Request,
-) -> Response {
-	if !config_manager.get_opensubsonic_enabled().await {
+/// Every endpoint Polaris implements.
+const SUPPORTED: &[&str] = &[
+	// System
+	"ping",
+	"getLicense",
+	"getOpenSubsonicExtensions",
+	"tokenInfo",
+	// Browsing
+	"getMusicFolders",
+	"getIndexes",
+	"getMusicDirectory",
+	"getGenres",
+	"getArtists",
+	"getArtist",
+	"getAlbum",
+	"getSong",
+	"getArtistInfo",
+	"getArtistInfo2",
+	"getAlbumInfo",
+	"getAlbumInfo2",
+	"getSimilarSongs",
+	"getSimilarSongs2",
+];
+
+async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
+	if !app.config_manager.get_opensubsonic_enabled().await {
 		return StatusCode::NOT_FOUND.into_response();
 	}
 
 	let query = request.uri().query().map(str::to_owned);
 	let is_post = request.method() == Method::POST;
+	let headers = request.headers().clone();
 	let body = if is_post {
 		if !is_form_content_type(&request) {
 			return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
@@ -111,59 +135,74 @@ async fn handle(
 	}
 
 	let method = method.strip_suffix(".view").unwrap_or(&method);
-	dispatch(method, &params, format, &config_manager, &state_manager)
-		.await
-		.into_response()
+	dispatch(&app, method, &params, &headers, format).await
 }
 
 async fn dispatch(
+	app: &App,
 	method: &str,
 	params: &Params,
+	headers: &HeaderMap,
 	format: Format,
-	config_manager: &config::Manager,
-	state_manager: &state::Manager,
-) -> Reply {
+) -> Response {
 	// Anyone may ask what the server supports, without credentials.
 	if method == "getOpenSubsonicExtensions" {
-		return Reply::ok(format, system::get_open_subsonic_extensions());
+		return Reply::ok(format, system::get_open_subsonic_extensions()).into_response();
 	}
 
-	if !matches!(method, "ping" | "getLicense" | "tokenInfo") {
+	if !SUPPORTED.contains(&method) {
 		return Reply::error(
 			format,
 			SubsonicError::generic(format!("Endpoint not supported: {method}")),
-		);
+		)
+		.into_response();
 	}
 
 	for required in ["v", "c"] {
 		if params.get(required).is_none_or(str::is_empty) {
-			return Reply::error(format, SubsonicError::missing_parameter(required));
+			return Reply::error(format, SubsonicError::missing_parameter(required))
+				.into_response();
 		}
 	}
 	if let Err(error) = auth::check_client_version(params.get("v").unwrap_or_default()) {
-		return Reply::error(format, error);
+		return Reply::error(format, error).into_response();
 	}
 
-	let user = match auth::authenticate(params, config_manager, state_manager).await {
+	let user = match auth::authenticate(params, &app.config_manager, &app.state_manager).await {
 		Ok(user) => user,
-		Err(error) => return Reply::error(format, error),
+		Err(error) => return Reply::error(format, error).into_response(),
 	};
+	let ctx = Ctx::new(app, &user);
 
+	let _ = headers;
+	match call(method, &ctx, params).await {
+		Ok(element) => Reply::ok(format, element).into_response(),
+		Err(error) => Reply::error(format, error).into_response(),
+	}
+}
+
+async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, SubsonicError> {
 	match method {
-		"ping" => Reply::ok(format, system::ping()),
-		"getLicense" => Reply::ok(format, system::get_license()),
-		"tokenInfo" => {
-			if user.mechanism == Mechanism::ApiKey {
-				Reply::ok(format, system::token_info(&user.username))
-			} else {
-				Reply::error(
-					format,
-					SubsonicError::mechanism_unsupported(
-						"tokenInfo requires API key authentication",
-					),
-				)
-			}
-		}
-		_ => unreachable!("method was checked above"),
+		"ping" => Ok(system::ping()),
+		"getLicense" => Ok(system::get_license()),
+		"tokenInfo" => system::token_info(ctx),
+
+		"getMusicFolders" => browse::get_music_folders(ctx, params).await,
+		"getIndexes" => browse::get_indexes(ctx, params).await,
+		"getMusicDirectory" => browse::get_music_directory(ctx, params).await,
+		"getGenres" => browse::get_genres(ctx, params).await,
+		"getArtists" => browse::get_artists(ctx, params).await,
+		"getArtist" => browse::get_artist(ctx, params).await,
+		"getAlbum" => browse::get_album(ctx, params).await,
+		"getSong" => browse::get_song(ctx, params).await,
+		"getArtistInfo" => browse::get_artist_info("artistInfo", ctx, params).await,
+		"getArtistInfo2" => browse::get_artist_info("artistInfo2", ctx, params).await,
+		"getAlbumInfo" | "getAlbumInfo2" => browse::get_album_info(ctx, params).await,
+		"getSimilarSongs" => browse::get_similar_songs("similarSongs", ctx, params).await,
+		"getSimilarSongs2" => browse::get_similar_songs("similarSongs2", ctx, params).await,
+
+		_ => Err(SubsonicError::generic(format!(
+			"Endpoint not supported: {method}"
+		))),
 	}
 }

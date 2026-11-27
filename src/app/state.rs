@@ -146,7 +146,7 @@ pub struct CreatedApiKey {
 	pub info: ApiKeyInfo,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectKind {
 	Song,
 	Album,

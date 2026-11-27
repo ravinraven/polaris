@@ -12,6 +12,8 @@ use crate::server::dto;
 use crate::server::test::{protocol, ServiceType, TestService};
 use crate::test_name;
 
+mod library;
+
 const SPEC_DIR: &str = "docs/opensubsonic/openapi";
 const VERSION: &str = "1.16.1";
 
@@ -165,6 +167,70 @@ async fn enabled_service(test_name: &str) -> (ServiceType, String) {
 		.into_body();
 	service.logout().await;
 	(service, created.key)
+}
+
+/// Like [`enabled_service`], with the test collection indexed.
+async fn library_service(test_name: &str) -> (ServiceType, String) {
+	let mut service = ServiceType::new(test_name).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+	let response = service
+		.fetch(&protocol::put_settings(dto::NewSettings {
+			opensubsonic_enabled: Some(true),
+			..Default::default()
+		}))
+		.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	service.index().await;
+
+	service.login().await;
+	let created = service
+		.fetch_json::<_, dto::CreatedApiKey>(&protocol::create_api_key(dto::NewApiKey {
+			label: "test".to_owned(),
+		}))
+		.await
+		.into_body();
+	service.logout().await;
+	(service, created.key)
+}
+
+/// The schema describing the response of an endpoint, in the vendored specification.
+fn response_schema(endpoint: &str) -> String {
+	let mut name = endpoint.to_owned();
+	name[..1].make_ascii_uppercase();
+	let specific = format!("endpoints/{endpoint}/{name}Response.json");
+	// A few endpoints share a response with another one and have no schema of their own.
+	if PathBuf::from(SPEC_DIR).join(&specific).exists() {
+		specific
+	} else {
+		"schemas/SubsonicResponse.json".to_owned()
+	}
+}
+
+/// Calls an endpoint as JSON with the test user's key, and checks the response against the
+/// endpoint's schema. Returns the `subsonic-response` object.
+async fn call(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> Value {
+	let uri = format!("/rest/{endpoint}?{}&{extra}", auth_query(key));
+	let reply = fetch(service, &uri).await;
+	assert_eq!(reply.status, StatusCode::OK, "{endpoint}");
+	let json = reply.json();
+	assert_matches_schema(&response_schema(endpoint), &json);
+	json["subsonic-response"].clone()
+}
+
+async fn call_ok(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> Value {
+	let response = call(service, key, endpoint, extra).await;
+	assert_eq!(response["status"], "ok", "{endpoint} {extra}: {response}");
+	response
+}
+
+async fn call_failing(service: &mut ServiceType, key: &str, endpoint: &str, extra: &str) -> u64 {
+	let response = call(service, key, endpoint, extra).await;
+	assert_eq!(
+		response["status"], "failed",
+		"{endpoint} {extra}: {response}"
+	);
+	response["error"]["code"].as_u64().unwrap()
 }
 
 struct Reply {

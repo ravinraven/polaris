@@ -74,6 +74,8 @@ pub enum Child {
 pub struct Element {
 	attrs: Vec<(&'static str, Scalar)>,
 	children: Vec<Child>,
+	/// Text content: the element's text in XML, a `value` property in JSON.
+	text: Option<String>,
 }
 
 impl Element {
@@ -93,6 +95,11 @@ impl Element {
 			Some(v) => self.attr(name, v),
 			None => self,
 		}
+	}
+
+	pub fn text(mut self, text: impl Into<String>) -> Self {
+		self.text = Some(text.into());
+		self
 	}
 
 	pub fn object(mut self, name: &'static str, element: Element) -> Self {
@@ -169,6 +176,15 @@ impl SubsonicError {
 			43,
 			"Multiple conflicting authentication mechanisms provided",
 		)
+	}
+	pub fn not_authorized() -> Self {
+		Self::new(50, "User is not authorized for the given operation")
+	}
+	pub fn not_found() -> Self {
+		Self::new(70, "The requested data was not found")
+	}
+	pub fn invalid_parameter(name: &str) -> Self {
+		Self::new(0, format!("Invalid value for parameter: {name}"))
 	}
 	pub fn invalid_api_key() -> Self {
 		Self::new(44, "Invalid API key")
@@ -275,6 +291,9 @@ fn element_to_json(element: &Element) -> Value {
 	for (name, value) in &element.attrs {
 		map.insert((*name).to_owned(), scalar_to_json(value));
 	}
+	if let Some(text) = &element.text {
+		map.insert("value".to_owned(), Value::String(text.clone()));
+	}
 	for child in &element.children {
 		match child {
 			Child::Object(name, e) => {
@@ -353,11 +372,14 @@ fn write_xml(out: &mut String, name: &str, element: &Element, namespace: bool) {
 		Child::List(_, v) => !v.is_empty(),
 		Child::Scalars(_, v) => !v.is_empty(),
 	});
-	if !has_children {
+	if !has_children && element.text.is_none() {
 		out.push_str("/>");
 		return;
 	}
 	out.push('>');
+	if let Some(text) = &element.text {
+		escape_xml(text, false, out);
+	}
 	for child in &element.children {
 		match child {
 			Child::Object(child_name, e) => write_xml(out, child_name, e, false),
@@ -498,6 +520,34 @@ mod test {
 		let text = root.children().find(|n| n.has_tag_name("text")).unwrap();
 		// Content line breaks are normalized to \n by parsers, except escaped carriage returns.
 		assert_eq!(text.text(), Some(tricky));
+	}
+
+	#[test]
+	fn text_content_is_a_value_property_in_json_and_a_text_node_in_xml() {
+		let lyrics = Element::new()
+			.attr("artist", "Someone")
+			.text("line 1\nline <2> & more");
+		let (body, _) = Reply::ok(
+			Format::Json,
+			Element::new().object("lyrics", lyrics.clone()),
+		)
+		.render();
+		let json: Value = serde_json::from_str(&body).unwrap();
+		assert_eq!(
+			json["subsonic-response"]["lyrics"]["value"],
+			"line 1\nline <2> & more"
+		);
+		assert_eq!(json["subsonic-response"]["lyrics"]["artist"], "Someone");
+
+		let (body, _) = Reply::ok(Format::Xml, Element::new().object("lyrics", lyrics)).render();
+		let doc = roxmltree::Document::parse(&body).unwrap();
+		let node = doc
+			.root_element()
+			.children()
+			.find(|n| n.has_tag_name("lyrics"))
+			.unwrap();
+		assert_eq!(node.attribute("artist"), Some("Someone"));
+		assert_eq!(node.text(), Some("line 1\nline <2> & more"));
 	}
 
 	#[test]

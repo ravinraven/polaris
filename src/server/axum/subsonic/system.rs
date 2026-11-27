@@ -1,6 +1,8 @@
 //! System endpoints: ping, getLicense, getOpenSubsonicExtensions and tokenInfo.
 
-use super::response::Element;
+use super::auth::Mechanism;
+use super::ctx::Ctx;
+use super::response::{Element, SubsonicError};
 
 /// The OpenSubsonic extensions this server supports, with their versions.
 const EXTENSIONS: &[(&str, &[i32])] = &[("apiKeyAuthentication", &[1]), ("formPost", &[1])];
@@ -26,6 +28,14 @@ pub fn get_open_subsonic_extensions() -> Element {
 	Element::new().list("openSubsonicExtensions", extensions)
 }
 
-pub fn token_info(username: &str) -> Element {
-	Element::new().object("tokenInfo", Element::new().attr("username", username))
+pub fn token_info(ctx: &Ctx) -> Result<Element, SubsonicError> {
+	if ctx.mechanism != Mechanism::ApiKey {
+		return Err(SubsonicError::mechanism_unsupported(
+			"tokenInfo requires API key authentication",
+		));
+	}
+	Ok(Element::new().object(
+		"tokenInfo",
+		Element::new().attr("username", ctx.user.clone()),
+	))
 }

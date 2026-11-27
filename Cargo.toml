@@ -10,6 +10,7 @@ axum-extra = { version = "0.12.5", features = ["typed-header"] }
 axum-range = { version = "1.0.0" }
 bitcode = { version = "0.6.9", features = ["serde"] }
 branca = "0.10.2"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 chumsky = "0.14"
 crc32fast = "1.5.4"
 enum-map = { version = "3", features = ["serde"] }
