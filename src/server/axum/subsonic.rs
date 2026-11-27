@@ -49,7 +49,7 @@ pub fn router() -> Router<App> {
 	let cors = CorsLayer::new()
 		.allow_origin(Any)
 		.allow_methods([Method::GET, Method::POST])
-		.allow_headers([header::CONTENT_TYPE])
+		.allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
 		.max_age(Duration::from_secs(24 * 60 * 60));
 
 	Router::new()
@@ -168,9 +168,7 @@ async fn handle(
 	Path(method): Path<String>,
 	request: Request,
 ) -> Response {
-	if !app.config_manager.get_opensubsonic_enabled().await {
-		return StatusCode::NOT_FOUND.into_response();
-	}
+	let enabled = app.config_manager.get_opensubsonic_enabled().await;
 
 	let query = request.uri().query().map(str::to_owned);
 	let is_post = request.method() == Method::POST;
@@ -188,18 +186,23 @@ async fn handle(
 	};
 
 	let params = Params::parse(query.as_deref(), body.as_deref());
+	// Switched off, the API is only there for the web client, which signs in with a session.
+	if !enabled && auth::session_token(&params, &headers).is_none() {
+		return StatusCode::NOT_FOUND.into_response();
+	}
 	let (format, format_error) = select_format(&params);
 	if let Some(error) = format_error {
 		return Reply::error(format, error).into_response();
 	}
 
 	let method = method.strip_suffix(".view").unwrap_or(&method);
-	dispatch(&app, &guard, method, &params, &headers, format).await
+	dispatch(&app, &guard, enabled, method, &params, &headers, format).await
 }
 
 async fn dispatch(
 	app: &App,
 	guard: &Guard,
+	enabled: bool,
 	method: &str,
 	params: &Params,
 	headers: &HeaderMap,
@@ -228,11 +231,19 @@ async fn dispatch(
 		return Reply::error(format, error).into_response();
 	}
 
-	let user =
-		match auth::authenticate(params, &app.config_manager, &app.state_manager, guard).await {
-			Ok(user) => user,
-			Err(error) => return Reply::error(format, error).into_response(),
-		};
+	let user = match auth::authenticate(
+		params,
+		headers,
+		enabled,
+		&app.config_manager,
+		&app.state_manager,
+		guard,
+	)
+	.await
+	{
+		Ok(user) => user,
+		Err(error) => return Reply::error(format, error).into_response(),
+	};
 	let ctx = Ctx::new(app, &user);
 
 	// Endpoints that answer with a file instead of a description

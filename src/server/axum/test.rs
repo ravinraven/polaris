@@ -69,6 +69,14 @@ impl TestService for AxumTestService {
 }
 
 impl AxumTestService {
+	/// The session token of whoever is logged in
+	pub fn authorization_token(&self) -> String {
+		self.authorization
+			.as_ref()
+			.map(|a| a.token.clone())
+			.expect("not logged in")
+	}
+
 	fn prepare_request<T>(&mut self, request: &Request<T>) -> TestRequest {
 		let url = request.uri().to_string();
 

@@ -18,7 +18,8 @@ The API is **off by default**. An administrator turns it on:
 
   or with `PUT /api/settings` and `{ "opensubsonic_enabled": true }`.
 
-While it is off, every URL under `/rest` answers `404`.
+While it is off, every URL under `/rest` answers `404` to apps. The one exception is the bundled
+web client, which signs in with its own Polaris session token (see below) and so keeps working.
 
 ## Signing in
 
@@ -29,6 +30,10 @@ Apps authenticate with every request. Polaris supports two ways:
   the OpenSubsonic API, never by the regular Polaris API. Sent as `apiKey=...`.
 - **Username and password**: `u=...&p=...`, where the password is plain or hex-encoded with an
   `enc:` prefix.
+
+- **Polaris session token** (`auth_token=...` or an `Authorization: Bearer` header): what the
+  bundled web client uses. It is the token returned by `POST /api/auth`, works whether or not the
+  API is switched on for apps, and cannot be combined with another credential (error `43`).
 
 Salted-token authentication (`t=...&s=...`) is **not** supported: it requires the server to know
 your password in clear text, and Polaris only stores a hash. Apps that can only do this cannot

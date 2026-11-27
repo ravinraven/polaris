@@ -185,3 +185,50 @@ async fn the_password_of_one_user_never_works_for_another() {
 	.await;
 	assert_eq!(error_code(&reply.json()), 40);
 }
+
+// Session tokens, the web client's way in
+
+#[tokio::test]
+async fn a_session_token_signs_in_even_when_the_api_is_off() {
+	let mut service = ServiceType::new(&test_name!()).await;
+	service.complete_initial_setup().await;
+	service.login_admin().await;
+	let token = service.authorization_token();
+	service.index().await;
+
+	// Off for apps: no credentials are told nothing
+	service.logout().await;
+	let reply = fetch(&mut service, &format!("/rest/ping?v={VERSION}&c=t&f=json")).await;
+	assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+	// With the session, in the query or in the header
+	let uri = format!("/rest/ping?auth_token={token}&v={VERSION}&c=t&f=json");
+	let reply = fetch(&mut service, &uri).await;
+	assert_eq!(reply.status, StatusCode::OK);
+	assert_eq!(reply.json()["subsonic-response"]["status"], "ok");
+	service.login_admin().await;
+	let reply = fetch(&mut service, &format!("/rest/ping?v={VERSION}&c=t&f=json")).await;
+	assert_eq!(reply.json()["subsonic-response"]["status"], "ok");
+
+	// A bad one is a plain wrong-credentials answer
+	let uri = format!("/rest/ping?auth_token=nope&v={VERSION}&c=t&f=json");
+	let reply = fetch(&mut service, &uri).await;
+	assert_eq!(reply.status, StatusCode::OK);
+	assert_eq!(error_code(&reply.json()), 40);
+
+	// Never mixed with other credentials
+	let uri = format!("/rest/ping?auth_token={token}&u=a&p=b&v={VERSION}&c=t&f=json");
+	let reply = fetch(&mut service, &uri).await;
+	assert_eq!(error_code(&reply.json()), 43);
+}
+
+#[tokio::test]
+async fn a_session_token_cannot_use_api_key_only_endpoints() {
+	let (mut service, _) = library_service(&test_name!()).await;
+	service.login_admin().await;
+	let token = service.authorization_token();
+	let uri = format!("/rest/tokenInfo?auth_token={token}&v={VERSION}&c=t&f=json");
+	let reply = fetch(&mut service, &uri).await;
+	assert_eq!(reply.status, StatusCode::OK);
+	assert_ne!(reply.json()["subsonic-response"]["status"], "ok");
+}
