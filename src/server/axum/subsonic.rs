@@ -22,6 +22,7 @@ mod auth;
 mod browse;
 mod ctx;
 mod lists;
+mod media;
 mod model;
 mod params;
 mod response;
@@ -114,6 +115,11 @@ const SUPPORTED: &[&str] = &[
 	"getSongsByGenre",
 	"search2",
 	"search3",
+	// Media
+	"stream",
+	"download",
+	"getCoverArt",
+	"getAvatar",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -182,7 +188,22 @@ async fn dispatch(
 	};
 	let ctx = Ctx::new(app, &user);
 
-	let _ = headers;
+	// Endpoints that answer with a file instead of a description
+	let file = match method {
+		"stream" => Some(media::serve_song(&ctx, params, headers, false).await),
+		"download" => Some(media::serve_song(&ctx, params, headers, true).await),
+		"getCoverArt" => Some(media::get_cover_art(&ctx, params, headers).await),
+		// Polaris has no user avatars
+		"getAvatar" => Some(Err(SubsonicError::not_found())),
+		_ => None,
+	};
+	if let Some(file) = file {
+		return match file {
+			Ok(response) => response,
+			Err(error) => Reply::error(format, error).into_response(),
+		};
+	}
+
 	match call(method, &ctx, params).await {
 		Ok(element) => Reply::ok(format, element).into_response(),
 		Err(error) => Reply::error(format, error).into_response(),
