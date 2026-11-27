@@ -66,6 +66,9 @@ pub enum Child {
 	Object(&'static str, Element),
 	/// A list of objects. XML repeats the element, JSON uses an array. Empty lists are omitted.
 	List(&'static str, Vec<Element>),
+	/// A list the specification requires: JSON has the array even when it is empty. (XML has
+	/// nothing for an empty list either way.)
+	RequiredList(&'static str, Vec<Element>),
 	/// A list of plain values (`"versions": [1]` / `<versions>1</versions>`).
 	Scalars(&'static str, Vec<Scalar>),
 }
@@ -109,6 +112,11 @@ impl Element {
 
 	pub fn list(mut self, name: &'static str, elements: Vec<Element>) -> Self {
 		self.children.push(Child::List(name, elements));
+		self
+	}
+
+	pub fn required_list(mut self, name: &'static str, elements: Vec<Element>) -> Self {
+		self.children.push(Child::RequiredList(name, elements));
 		self
 	}
 
@@ -303,6 +311,10 @@ fn element_to_json(element: &Element) -> Value {
 				let items = elements.iter().map(element_to_json).collect();
 				map.insert((*name).to_owned(), Value::Array(items));
 			}
+			Child::RequiredList(name, elements) => {
+				let items = elements.iter().map(element_to_json).collect();
+				map.insert((*name).to_owned(), Value::Array(items));
+			}
 			Child::Scalars(name, values) if !values.is_empty() => {
 				let items = values.iter().map(scalar_to_json).collect();
 				map.insert((*name).to_owned(), Value::Array(items));
@@ -369,7 +381,7 @@ fn write_xml(out: &mut String, name: &str, element: &Element, namespace: bool) {
 
 	let has_children = element.children.iter().any(|c| match c {
 		Child::Object(..) => true,
-		Child::List(_, v) => !v.is_empty(),
+		Child::List(_, v) | Child::RequiredList(_, v) => !v.is_empty(),
 		Child::Scalars(_, v) => !v.is_empty(),
 	});
 	if !has_children && element.text.is_none() {
@@ -383,7 +395,7 @@ fn write_xml(out: &mut String, name: &str, element: &Element, namespace: bool) {
 	for child in &element.children {
 		match child {
 			Child::Object(child_name, e) => write_xml(out, child_name, e, false),
-			Child::List(child_name, elements) => {
+			Child::List(child_name, elements) | Child::RequiredList(child_name, elements) => {
 				for e in elements {
 					write_xml(out, child_name, e, false);
 				}
@@ -520,6 +532,32 @@ mod test {
 		let text = root.children().find(|n| n.has_tag_name("text")).unwrap();
 		// Content line breaks are normalized to \n by parsers, except escaped carriage returns.
 		assert_eq!(text.text(), Some(tricky));
+	}
+
+	#[test]
+	fn required_lists_are_arrays_in_json_even_when_empty() {
+		let body = Element::new()
+			.required_list("entry", vec![])
+			.list("optional", vec![])
+			.required_list("full", vec![Element::new().attr("id", "1")]);
+		let (json, _) = Reply::ok(Format::Json, Element::new().object("x", body.clone())).render();
+		let json: Value = serde_json::from_str(&json).unwrap();
+		assert_eq!(
+			json["subsonic-response"]["x"]["entry"],
+			serde_json::json!([])
+		);
+		assert!(json["subsonic-response"]["x"].get("optional").is_none());
+		assert_eq!(json["subsonic-response"]["x"]["full"][0]["id"], "1");
+
+		let (xml, _) = Reply::ok(Format::Xml, Element::new().object("x", body)).render();
+		let doc = roxmltree::Document::parse(&xml).unwrap();
+		let x = doc
+			.root_element()
+			.children()
+			.find(|n| n.has_tag_name("x"))
+			.unwrap();
+		assert_eq!(x.children().filter(|n| n.has_tag_name("full")).count(), 1);
+		assert!(!x.children().any(|n| n.has_tag_name("entry")));
 	}
 
 	#[test]

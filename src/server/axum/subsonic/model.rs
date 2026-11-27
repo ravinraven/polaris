@@ -21,6 +21,14 @@ use super::response::{Element, SubsonicError};
 
 // Dates and file types
 
+/// The current time, in seconds since the epoch.
+pub fn now_secs() -> i64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs() as i64)
+		.unwrap_or_default()
+}
+
 pub fn iso8601(seconds_since_epoch: i64) -> String {
 	DateTime::from_timestamp(seconds_since_epoch, 0)
 		.unwrap_or_default()

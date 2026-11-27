@@ -5,7 +5,12 @@ use super::ctx::Ctx;
 use super::response::{Element, SubsonicError};
 
 /// The OpenSubsonic extensions this server supports, with their versions.
-const EXTENSIONS: &[(&str, &[i32])] = &[("apiKeyAuthentication", &[1]), ("formPost", &[1])];
+const EXTENSIONS: &[(&str, &[i32])] = &[
+	("apiKeyAuthentication", &[1]),
+	("formPost", &[1]),
+	("playbackReport", &[1]),
+	("topSongsByArtistId", &[1]),
+];
 
 pub fn ping() -> Element {
 	Element::new()

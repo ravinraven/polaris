@@ -19,6 +19,7 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::app::App;
 
 mod admin;
+mod annotation;
 mod auth;
 mod browse;
 mod ctx;
@@ -133,6 +134,16 @@ const SUPPORTED: &[&str] = &[
 	"getUsers",
 	"getScanStatus",
 	"startScan",
+	// What users do with music
+	"star",
+	"unstar",
+	"setRating",
+	"scrobble",
+	"getNowPlaying",
+	"reportPlayback",
+	"getStarred",
+	"getStarred2",
+	"getTopSongs",
 ];
 
 async fn handle(State(app): State<App>, Path(method): Path<String>, request: Request) -> Response {
@@ -260,6 +271,16 @@ async fn call(method: &str, ctx: &Ctx, params: &Params) -> Result<Element, Subso
 		"getUsers" => admin::get_users(ctx, params).await,
 		"getScanStatus" => admin::get_scan_status(ctx, params).await,
 		"startScan" => admin::start_scan(ctx, params).await,
+
+		"star" => annotation::star(ctx, params).await,
+		"unstar" => annotation::unstar(ctx, params).await,
+		"setRating" => annotation::set_rating(ctx, params).await,
+		"scrobble" => annotation::scrobble(ctx, params).await,
+		"getNowPlaying" => annotation::get_now_playing(ctx, params).await,
+		"reportPlayback" => annotation::report_playback(ctx, params).await,
+		"getStarred" => annotation::get_starred(ctx, params).await,
+		"getStarred2" => annotation::get_starred2(ctx, params).await,
+		"getTopSongs" => annotation::get_top_songs(ctx, params).await,
 
 		_ => Err(SubsonicError::generic(format!(
 			"Endpoint not supported: {method}"

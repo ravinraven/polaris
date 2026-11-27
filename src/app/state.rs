@@ -231,9 +231,28 @@ impl ItemState {
 	}
 }
 
+/// What a user is playing right now, as reported by their player. Kept in memory only: it
+/// is meaningless after a restart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NowPlaying {
+	pub user: String,
+	pub song_id: String,
+	pub client: String,
+	/// Seconds since the epoch.
+	pub started_at: i64,
+	pub updated_at: i64,
+	pub position_ms: Option<u64>,
+	pub state: Option<String>,
+	pub playback_rate: Option<f64>,
+}
+
+/// How long a player can stay silent before what it was playing is forgotten (seconds).
+const NOW_PLAYING_EXPIRY_SECS: i64 = 10 * 60;
+
 #[derive(Clone)]
 pub struct Manager {
 	db: ndb::Manager,
+	now_playing: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, NowPlaying>>>,
 }
 
 fn db_err(e: native_db::db_type::Error) -> Error {
@@ -287,7 +306,42 @@ fn lookup_key(kind: ObjectKind, natural_key: &str) -> String {
 
 impl Manager {
 	pub fn new(db: ndb::Manager) -> Self {
-		Self { db }
+		Self {
+			db,
+			now_playing: Default::default(),
+		}
+	}
+
+	// What is playing now (in memory only)
+
+	/// Records what a user is playing. The time they started is kept while they stay on the
+	/// same song.
+	pub fn set_now_playing(&self, mut entry: NowPlaying) {
+		let mut all = self.now_playing.lock().unwrap();
+		if let Some(previous) = all.get(&entry.user) {
+			if previous.song_id == entry.song_id {
+				entry.started_at = previous.started_at;
+			}
+		}
+		all.insert(entry.user.clone(), entry);
+	}
+
+	pub fn clear_now_playing(&self, user: &str) {
+		self.now_playing.lock().unwrap().remove(user);
+	}
+
+	pub fn now_playing_of(&self, user: &str) -> Option<NowPlaying> {
+		self.now_playing.lock().unwrap().get(user).cloned()
+	}
+
+	/// What everyone is playing, forgetting players that went quiet.
+	pub fn now_playing(&self) -> Vec<NowPlaying> {
+		let now = now();
+		let mut all = self.now_playing.lock().unwrap();
+		all.retain(|_, e| now - e.updated_at < NOW_PLAYING_EXPIRY_SECS);
+		let mut entries: Vec<_> = all.values().cloned().collect();
+		entries.sort_by(|a, b| a.user.cmp(&b.user));
+		entries
 	}
 
 	async fn read<T, F>(&self, f: F) -> Result<T, Error>
@@ -1367,6 +1421,80 @@ mod test {
 		assert_eq!(
 			state.playlist_meta("alice", "new").await.unwrap().comment,
 			None
+		);
+	}
+
+	#[tokio::test]
+	async fn now_playing_is_per_user_and_forgotten_when_cleared() {
+		let (state, _) = manager(test_name!());
+		let entry = |user: &str, song: &str| NowPlaying {
+			user: user.to_owned(),
+			song_id: song.to_owned(),
+			client: "player".to_owned(),
+			started_at: now(),
+			updated_at: now(),
+			position_ms: None,
+			state: None,
+			playback_rate: None,
+		};
+		assert!(state.now_playing().is_empty());
+		state.set_now_playing(entry("bob", "so_1"));
+		state.set_now_playing(entry("alice", "so_2"));
+		state.set_now_playing(entry("alice", "so_3"));
+		let all = state.now_playing();
+		assert_eq!(all.len(), 2, "one entry per user");
+		assert_eq!(all[0].user, "alice");
+		assert_eq!(all[0].song_id, "so_3");
+		assert_eq!(state.now_playing_of("bob").unwrap().song_id, "so_1");
+
+		state.clear_now_playing("alice");
+		assert!(state.now_playing_of("alice").is_none());
+		assert_eq!(state.now_playing().len(), 1);
+		state.clear_now_playing("nobody");
+
+		// Clones share what is playing
+		let clone = state.clone();
+		clone.clear_now_playing("bob");
+		assert!(state.now_playing().is_empty());
+	}
+
+	#[tokio::test]
+	async fn staying_on_a_song_keeps_its_start_time_and_silent_players_expire() {
+		let (state, _) = manager(test_name!());
+		let mut entry = NowPlaying {
+			user: "alice".to_owned(),
+			song_id: "so_1".to_owned(),
+			client: "player".to_owned(),
+			started_at: 1000,
+			updated_at: now(),
+			position_ms: Some(5),
+			state: None,
+			playback_rate: None,
+		};
+		state.set_now_playing(entry.clone());
+		entry.started_at = 2000;
+		entry.position_ms = Some(9000);
+		state.set_now_playing(entry.clone());
+		let current = state.now_playing_of("alice").unwrap();
+		assert_eq!(
+			current.started_at, 1000,
+			"same song: the start time is kept"
+		);
+		assert_eq!(current.position_ms, Some(9000));
+
+		entry.song_id = "so_2".to_owned();
+		state.set_now_playing(entry.clone());
+		assert_eq!(
+			state.now_playing_of("alice").unwrap().started_at,
+			2000,
+			"new song"
+		);
+
+		entry.updated_at = now() - NOW_PLAYING_EXPIRY_SECS - 1;
+		state.set_now_playing(entry);
+		assert!(
+			state.now_playing().is_empty(),
+			"a player that went quiet is forgotten"
 		);
 	}
 
